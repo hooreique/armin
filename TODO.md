@@ -6,10 +6,10 @@ listed verification has passed; items marked `[~]` are in progress.
 
 ## Resume here
 
-- Current phase: tracked integration checkpoint and reproducible dependency capture
-- Next action: commit the quality-gated integrated sources, run `nix run .#update-deps`, commit the
-  generated Gradle dependency manifest, then run the Nix checks and APK inspection
-- Last checkpoint commit: `fe7a3f0 build: complete pinned Android toolchain`
+- Current phase: tracked-source Nix build and release-artifact verification
+- Next action: commit the generated Gradle dependency manifest, run `nix build .#default` and
+  `nix flake check`, then inspect the resulting APK
+- Last checkpoint commit: `6afb42a feat: implement secure WebView browser and local proxy`
 - Integrated browser, proxy, Android, and Nix sources pass the complete Gradle quality gate. The
   remaining work is the tracked-source Nix build and release-artifact verification.
 
@@ -20,7 +20,7 @@ listed verification has passed; items marked `[~]` are in progress.
 - [x] Add Spotless/ktfmt, Detekt, Android Lint, unit tests, and the `quality` task.
 - [x] Add `flake.nix`, `flake.lock`, Android SDK composition, and the development shell.
 - [x] Put `java`, `gradle`, `adb`, `ktfmt`, and JetBrains `kotlin-lsp` in the shell.
-- [~] Add offline Gradle dependency capture plus `nix run .#update-deps`.
+- [x] Add offline Gradle dependency capture plus `nix run .#update-deps`.
 - [x] Make `nix fmt` format Nix and Kotlin/Gradle Kotlin files.
 - [ ] Make `nix flake check` run all required quality gates.
 - [ ] Make `nix build .#default` produce `result/apk/armin.apk`.
@@ -59,7 +59,7 @@ listed verification has passed; items marked `[~]` are in progress.
 
 ## 4. Integration, documentation, and release artifact
 
-- [~] Integrate source work streams and resolve API/lifecycle races (final source audit running).
+- [x] Integrate source work streams and resolve API/lifecycle races.
 - [~] Confirm only `INTERNET` permission and no exported control surface/unsafe JS bridge (final
   manifest/APK audit pending).
 - [~] Confirm no site-data clearing, SSL bypass, remote code, analytics, or production key exists
@@ -96,6 +96,17 @@ Add commands, date, commit, and result here. Do not mark a gate complete without
 - 2026-08-25: `nix fmt`, `git diff --check`, `spotlessApply`, and the complete `quality` gate passed.
   The gate ran 67 JVM tests with zero failures/skips, Detekt, Spotless, and Android Lint with zero
   issues; `:app:compileDebugAndroidTestKotlin` also succeeded.
+- 2026-08-25 (`6afb42a`): integrated sources were committed so every Android source/resource/test is
+  present in the flake's Git source. The first `nix run .#update-deps` exposed an upstream Gradle 9
+  incompatibility in nixpkgs' default unqualified `configurations` task. An attempted qualified
+  eager resolver then exposed an unresolvable AGP internal variant, so the update app now records
+  the exact quality, APK, and instrumentation-compile task graph instead.
+- 2026-08-25: the first exact-task capture reached APK/lint/test compilation but the Kotlin client
+  looped while discovering daemon files under Nix's sanitized `user.home` (`?`). Nix now supplies a
+  writable task-specific Java home path and Kotlin compilation is fixed to the in-process strategy.
+- 2026-08-25: `nix run .#update-deps` completed the exact 69-task graph in 2m47s, including the
+  quality gate, debug APK assembly, and instrumentation-test Kotlin compilation. The resulting
+  72,285-byte lockfile records 390 Maven paths across the pinned repositories.
 
 ## Decisions and known constraints
 

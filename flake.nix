@@ -111,15 +111,18 @@
             };
 
             gradleBuildTask = "quality :app:assembleDebug";
-            gradleUpdateTask = "nixDownloadDeps";
+            # The pinned nixpkgs eager resolver is not Gradle-9-safe. Exercising the exact build
+            # and verification graph records every dependency that offline builds/tests consume.
+            gradleUpdateTask = "quality :app:assembleDebug :app:compileDebugAndroidTestKotlin";
             gradleFlags = [
               "-Dorg.gradle.java.home=${javaHome}"
               "-Pandroid.aapt2FromMavenOverride=${aapt2}"
             ];
 
             preConfigure = ''
-              export HOME="$TMPDIR/home"
-              mkdir -p "$HOME"
+              armin_build_home="$TMPDIR/armin-home"
+              mkdir -p "$armin_build_home"
+              gradleFlagsArray+=("-Duser.home=$armin_build_home")
             '';
 
             installPhase = ''
