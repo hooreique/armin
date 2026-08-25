@@ -6,12 +6,12 @@ listed verification has passed; items marked `[~]` are in progress.
 
 ## Resume here
 
-- Current phase: final Nix source-filter checkpoint and rebuild
-- Next action: commit the non-build documentation source filter, rerun Nix build/check once, then
-  finalize this record without invalidating the Android derivation
-- Last checkpoint commit: `fbe9c3e fix: make proxy DNS lifecycle cancellable`
-- The API 29 application artifact passes, but the final verification record itself currently changes
-  the broad package source. Exclude only non-build root documents before the final handoff commit.
+- Current phase: implementation complete; device-only acceptance execution is deferred
+- Next action: when an Android 10+ device/emulator is available, sideload `result/apk/armin.apk`
+  and execute the fourteen compiled instrumentation fixtures
+- Last build-affecting checkpoint: `fca5d73 build: exclude non-build docs from package source`
+- Source, dependency capture, Gradle quality, Nix build/check, and final APK inspection all pass.
+  The only open `[~]` item requires Android hardware or an emulator unavailable in this workspace.
 
 ## 1. Project and reproducible toolchain
 
@@ -22,9 +22,9 @@ listed verification has passed; items marked `[~]` are in progress.
 - [x] Put `java`, `gradle`, `adb`, `ktfmt`, and JetBrains `kotlin-lsp` in the shell.
 - [x] Add offline Gradle dependency capture plus `nix run .#update-deps`.
 - [x] Make `nix fmt` format Nix and Kotlin/Gradle Kotlin files.
-- [~] Make `nix flake check` run all required quality gates (source-filter rerun pending).
-- [~] Make `nix build .#default` produce `result/apk/armin.apk` (source-filter rerun pending).
-- [~] Verify that the APK is structurally installable and debug-signed (final rerun pending).
+- [x] Make `nix flake check` run all required quality gates.
+- [x] Make `nix build .#default` produce `result/apk/armin.apk`.
+- [x] Verify that the APK is structurally installable and debug-signed.
 
 ## 2. Browser UI and navigation
 
@@ -69,10 +69,10 @@ listed verification has passed; items marked `[~]` are in progress.
 - [x] Run `./gradlew quality` successfully.
 - [x] Run focused proxy/browser unit tests successfully.
 - [x] Run `nix fmt` successfully.
-- [~] Run `nix flake check` successfully for the final source filter.
-- [~] Run `nix build .#default` successfully from the final tracked sources.
-- [~] Inspect the final `result/apk/armin.apk` name, manifest, signature, and contents.
-- [~] Update this file with final verification evidence and handoff notes.
+- [x] Run `nix flake check` successfully for the final source filter.
+- [x] Run `nix build .#default` successfully from the final tracked sources.
+- [x] Inspect the final `result/apk/armin.apk` name, manifest, signature, and contents.
+- [x] Update this file with final verification evidence and handoff notes.
 
 ## Verification log
 
@@ -108,8 +108,7 @@ Add commands, date, commit, and result here. Do not mark a gate complete without
   quality gate, debug APK assembly, and instrumentation-test Kotlin compilation. The resulting
   72,285-byte lockfile records 390 Maven paths across the pinned repositories.
 - 2026-08-25 (`f7f94c9`, pre-audit artifact): `nix build .#default` succeeded from the committed
-  source and dependency
-  lock, producing `result/apk/armin.apk` (7,507,814 bytes, SHA-256
+  source and dependency lock, producing `result/apk/armin.apk` (7,507,814 bytes, SHA-256
   `2e0de280a9883f3b96b7ebf2f7f32f976023fc78dcb4b9444c5d2dc867219d69`). `nix flake check`
   then evaluated every output and passed the package-backed quality check.
 - 2026-08-25: the dev shell exposed all required tools/environment variables; `kotlin-lsp --version`
@@ -134,14 +133,15 @@ Add commands, date, commit, and result here. Do not mark a gate complete without
 - 2026-08-26 (`fbe9c3e`): `nix run .#update-deps` reran all 69 capture tasks successfully in 2m50s;
   `nix/gradle-deps.json` remained byte-identical (SHA-256
   `a9515faef4bfeb04f530c64b908ef86a17a17c8cc0b38940b06078bf2eb43e18`).
-- 2026-08-26: `nix build .#default` rebuilt the committed source, executing all 60 Nix quality/APK
-  tasks in 2m3s. `nix flake check --print-build-logs` then passed every flake output and the
-  package-backed default check.
-- 2026-08-26: the final `/nix/store/66r96wa12hi8q6gwhwzwsyjr5n65szr0-armin-0.1.0` output contains
-  `apk/armin.apk` (7,497,706 bytes, SHA-256
-  `b0b826a076f978d99f3b415b5be35f19dfdeb663951e23c2b7f5e1abc675e86b`). Build-tools 37 verified
-  zip alignment and one v2 `CN=Android Debug` RSA-2048 signer.
-- 2026-08-26: the final manifest reports package `dev.armin`, min/target/compile SDK 29/37/37,
+- 2026-08-26: `nix build .#default` rebuilt the committed DNS source, executing all 60 Nix
+  quality/APK tasks in 2m3s. The package source was then narrowed to exclude only the three root
+  non-build documents, preventing this verification record from invalidating the APK derivation.
+- 2026-08-26 (`fca5d73`): the final source-filter build reran all 60 tasks successfully in 2m12s,
+  and `nix flake check --print-build-logs` passed every flake output and the package-backed default
+  check. `/nix/store/zk024phhn4b1zmacwb3415h5cd48hrxq-armin-0.1.0/apk/armin.apk` is 7,497,706
+  bytes with SHA-256 `95f9d422aed42976253ad9b9405d4f7721eede80142fc335ca62a7749f500e82`.
+- 2026-08-26: build-tools 37 verified final zip alignment and one v2 `CN=Android Debug` RSA-2048
+  signer. The final manifest reports package `dev.armin`, min/target/compile SDK 29/37/37,
   debug mode, no backup, no cleartext, direct `INTERNET` only, the documented AndroidX
   self-signature permission, and only its `DUMP`-protected exported profile receiver beyond the
   required launcher. All 86 APK entries again contain no test tree, key/keystore/certificate, or
