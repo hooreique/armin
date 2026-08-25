@@ -15,7 +15,6 @@
             android:name=".ui.MainActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|uiMode"
             android:exported="true"
-            android:launchMode="singleTask"
             android:theme="@style/Theme.Armin">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

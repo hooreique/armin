@@ -12,4 +12,6 @@ result
 result-*
 .direnv
 .devenv
+.kotlin/
+.treefmtcache
 *.apk

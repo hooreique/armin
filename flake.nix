@@ -37,6 +37,7 @@
           aapt2 = "${androidHome}/build-tools/37.0.0/aapt2";
           gradle = pkgs.gradle_9;
           java = pkgs.jdk17;
+          javaHome = java.home;
           kotlinLsp = pkgs.callPackage ./nix/kotlin-lsp.nix { };
           ktfmt = pkgs.stdenvNoCC.mkDerivation {
             pname = "ktfmt";
@@ -70,69 +71,74 @@
               in
               !(
                 type == "directory"
-                && builtins.elem name [
-                  ".direnv"
-                  ".git"
-                  ".gradle"
-                  ".idea"
-                  ".vscode"
-                  "build"
-                  "result"
-                ]
+                && (
+                  builtins.elem name [
+                    ".direnv"
+                    ".git"
+                    ".gradle"
+                    ".idea"
+                    ".vscode"
+                    "build"
+                    "result"
+                  ]
+                  || pkgs.lib.hasPrefix "result-" name
+                )
               );
           };
-          armin = pkgs.stdenvNoCC.mkDerivation (
-            finalAttrs: {
-              pname = "armin";
-              version = "0.1.0";
-              src = cleanSource;
+          armin = pkgs.stdenvNoCC.mkDerivation (finalAttrs: {
+            pname = "armin";
+            version = "0.1.0";
+            src = cleanSource;
 
-              nativeBuildInputs = [
-                androidSdk
-                gradle
-                java
-              ];
+            nativeBuildInputs = [
+              androidSdk
+              gradle
+              java
+            ];
 
-              env = {
-                ANDROID_HOME = androidHome;
-                ANDROID_SDK_ROOT = androidHome;
-                JAVA_HOME = java;
-              };
+            env = {
+              ANDROID_HOME = androidHome;
+              ANDROID_SDK_ROOT = androidHome;
+              JAVA_HOME = javaHome;
+            };
 
-              mitmCache = gradle.fetchDeps {
-                pkg = finalAttrs.finalPackage;
-                data = ./nix/gradle-deps.json;
-              };
+            mitmCache = gradle.fetchDeps {
+              pkg = finalAttrs.finalPackage;
+              data = ./nix/gradle-deps.json;
+            };
 
-              gradleBuildTask = "quality :app:assembleDebug";
-              gradleUpdateTask = "nixDownloadDeps";
-              gradleFlags = [
-                "-Dorg.gradle.java.home=${java}"
-                "-Pandroid.aapt2FromMavenOverride=${aapt2}"
-              ];
+            gradleBuildTask = "quality :app:assembleDebug";
+            gradleUpdateTask = "nixDownloadDeps";
+            gradleFlags = [
+              "-Dorg.gradle.java.home=${javaHome}"
+              "-Pandroid.aapt2FromMavenOverride=${aapt2}"
+            ];
 
-              preConfigure = ''
-                export HOME="$TMPDIR/home"
-                mkdir -p "$HOME"
-              '';
+            preConfigure = ''
+              export HOME="$TMPDIR/home"
+              mkdir -p "$HOME"
+            '';
 
-              installPhase = ''
-                runHook preInstall
-                install -Dm755 app/build/outputs/apk/debug/app-debug.apk "$out/apk/armin.apk"
-                runHook postInstall
-              '';
+            installPhase = ''
+              runHook preInstall
+              install -Dm755 app/build/outputs/apk/debug/app-debug.apk "$out/apk/armin.apk"
+              runHook postInstall
+            '';
 
-              meta = {
-                description = "Android SpoofDPI WebView browser";
-                license = pkgs.lib.licenses.asl20;
-                platforms = supportedSystems;
-              };
-            }
-          );
+            meta = {
+              description = "Android SpoofDPI WebView browser";
+              platforms = supportedSystems;
+            };
+          });
         in
         {
           default = armin;
-          inherit androidSdk armin kotlinLsp ktfmt;
+          inherit
+            androidSdk
+            armin
+            kotlinLsp
+            ktfmt
+            ;
         }
       );
 
@@ -154,6 +160,7 @@
           androidSdk = self.packages.${system}.androidSdk;
           androidHome = "${androidSdk}/share/android-sdk";
           java = pkgs.jdk17;
+          javaHome = java.home;
           kotlinLsp = self.packages.${system}.kotlinLsp;
         in
         {
@@ -168,7 +175,7 @@
 
             ANDROID_HOME = androidHome;
             ANDROID_SDK_ROOT = androidHome;
-            JAVA_HOME = java;
+            JAVA_HOME = javaHome;
             KOTLIN_LSP_DIR = "${kotlinLsp}/libexec/kotlin-lsp";
 
             shellHook = ''

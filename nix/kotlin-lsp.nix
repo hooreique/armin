@@ -1,9 +1,12 @@
 {
+  autoPatchelfHook,
   fetchurl,
   jdk25,
   lib,
   makeWrapper,
+  stdenv,
   stdenvNoCC,
+  zlib,
 }:
 
 let
@@ -30,7 +33,21 @@ stdenvNoCC.mkDerivation {
     inherit (source) hash;
   };
 
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [
+    autoPatchelfHook
+    makeWrapper
+  ];
+
+  buildInputs = [
+    stdenv.cc.cc.lib
+    zlib
+  ];
+
+  # The archive bundles an unpatched generic-Linux JBR. The launcher falls
+  # back to JAVA_HOME when it is absent; use nixpkgs' pinned JDK 25 instead.
+  postPatch = ''
+    rm -rf jbr
+  '';
 
   installPhase = ''
     runHook preInstall
@@ -38,7 +55,7 @@ stdenvNoCC.mkDerivation {
     mkdir -p "$out/bin" "$out/libexec/kotlin-lsp"
     cp -R . "$out/libexec/kotlin-lsp"
     makeWrapper "$out/libexec/kotlin-lsp/bin/intellij-server" "$out/bin/kotlin-lsp" \
-      --set JAVA_HOME ${jdk25} \
+      --set JAVA_HOME ${jdk25.home} \
       --prefix PATH : ${lib.makeBinPath [ jdk25 ]}
 
     runHook postInstall
