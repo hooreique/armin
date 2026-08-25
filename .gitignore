@@ -10,3 +10,6 @@ local.properties
 .vscode
 result
 result-*
+.direnv
+.devenv
+*.apk
