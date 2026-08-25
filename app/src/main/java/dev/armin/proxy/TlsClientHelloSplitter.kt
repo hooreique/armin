@@ -47,18 +47,21 @@ class TlsClientHelloSplitter(private val sniChunkSize: Int = 1) {
         for ((index, segment) in segments.withIndex()) {
             output.write(segment)
             output.flush()
-            if (interSegmentDelayMillis > 0 && index < segments.lastIndex) {
-                try {
-                    Thread.sleep(interSegmentDelayMillis)
-                } catch (interrupted: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    throw InterruptedIOException("Interrupted while splitting ClientHello").apply {
-                        initCause(interrupted)
-                    }
-                }
-            }
+            pauseBetweenSegments(interSegmentDelayMillis, index < segments.lastIndex)
         }
         return segments.size
+    }
+
+    private fun pauseBetweenSegments(delayMillis: Long, hasNextSegment: Boolean) {
+        if (delayMillis == 0L || !hasNextSegment) return
+        try {
+            Thread.sleep(delayMillis)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw InterruptedIOException("Interrupted while splitting ClientHello").apply {
+                initCause(interrupted)
+            }
+        }
     }
 
     private fun areValidRanges(ranges: List<IntRange>, encodedSize: Int): Boolean {

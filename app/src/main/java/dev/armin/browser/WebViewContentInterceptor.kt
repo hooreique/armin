@@ -13,7 +13,17 @@ internal class WebViewContentInterceptor(
     private val topLevelDocumentUrl: () -> String?,
 ) {
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
-        val documentUrl = topLevelDocumentUrl()
+        return intercept(request, topLevelDocumentUrl())
+    }
+
+    /** ServiceWorkerController cannot identify which WebView owns a request. */
+    fun interceptWithoutTopLevelContext(request: WebResourceRequest): WebResourceResponse? =
+        intercept(request, null)
+
+    private fun intercept(
+        request: WebResourceRequest,
+        documentUrl: String?,
+    ): WebResourceResponse? {
         val contentRequest =
             ContentRequest(
                 url = request.url.toString(),
@@ -31,8 +41,9 @@ internal class WebViewContentInterceptor(
         }
     }
 
-    private fun hostname(url: String?): String? =
-        url?.let { runCatching { URI(it).host }.getOrNull() }
+    private fun hostname(url: String?): String? = url?.let {
+        runCatching { URI(it).host }.getOrNull()
+    }
 
     private fun emptyResponse(statusCode: Int, reason: String) =
         WebResourceResponse(
@@ -57,7 +68,7 @@ internal class WebViewContentInterceptor(
 
 /** Process-wide Service Worker hook using the same no-op/filter engine as ordinary requests. */
 internal class ServiceWorkerContentBlockingBridge(
-    private val interceptor: WebViewContentInterceptor,
+    private val interceptor: WebViewContentInterceptor
 ) : AutoCloseable {
     private var installed = false
 
@@ -71,22 +82,45 @@ internal class ServiceWorkerContentBlockingBridge(
             return false
         }
 
-        ServiceWorkerControllerCompat.getInstance()
-            .setServiceWorkerClient(
-                object : ServiceWorkerClientCompat() {
-                    override fun shouldInterceptRequest(
-                        request: WebResourceRequest
-                    ): WebResourceResponse? = interceptor.intercept(request)
-                }
-            )
-        installed = true
+        synchronized(OWNER_LOCK) {
+            if (ACTIVE_BRIDGES.isEmpty()) {
+                ServiceWorkerControllerCompat.getInstance()
+                    .setServiceWorkerClient(PROCESS_WIDE_CLIENT)
+            }
+            ACTIVE_BRIDGES.remove(this)
+            ACTIVE_BRIDGES.add(this)
+            installed = true
+        }
         return true
     }
 
     override fun close() {
-        if (installed) {
-            ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(null)
+        synchronized(OWNER_LOCK) {
+            if (!installed) return
+            ACTIVE_BRIDGES.remove(this)
+            if (
+                ACTIVE_BRIDGES.isEmpty() &&
+                    WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE)
+            ) {
+                ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(null)
+            }
             installed = false
         }
+    }
+
+    private companion object {
+        val OWNER_LOCK = Any()
+        val ACTIVE_BRIDGES = linkedSetOf<ServiceWorkerContentBlockingBridge>()
+        val PROCESS_WIDE_CLIENT =
+            object : ServiceWorkerClientCompat() {
+                override fun shouldInterceptRequest(
+                    request: WebResourceRequest
+                ): WebResourceResponse? {
+                    val active = synchronized(OWNER_LOCK) { ACTIVE_BRIDGES.lastOrNull() }
+                    // The API supplies no originating WebView. Null context is safer than
+                    // attributing one Activity's Service Worker request to another document.
+                    return active?.interceptor?.interceptWithoutTopLevelContext(request)
+                }
+            }
     }
 }

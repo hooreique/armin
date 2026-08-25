@@ -61,7 +61,15 @@ class ConnectRequestParser(private val maxHeaderBytes: Int = 16 * 1024) {
                 "CONNECT header exceeds the configured limit",
             )
         }
-        if (!headerBytes.endsWith(HEADER_TERMINATOR)) {
+        if (
+            headerBytes.size < HEADER_TERMINATOR.size ||
+                !headerBytes
+                    .copyOfRange(
+                        headerBytes.size - HEADER_TERMINATOR.size,
+                        headerBytes.size,
+                    )
+                    .contentEquals(HEADER_TERMINATOR)
+        ) {
             throw ConnectRequestException(
                 ConnectRequestFailure.MALFORMED_REQUEST,
                 "CONNECT header has no CRLF terminator",
@@ -94,107 +102,116 @@ class ConnectRequestParser(private val maxHeaderBytes: Int = 16 * 1024) {
         val (host, port) = parseAuthority(requestParts[1])
         return ConnectRequest(host, port, version)
     }
+}
 
-    private fun validateHeaders(lines: List<String>) {
-        for (line in lines) {
-            if (line.isEmpty()) throw malformed("Unexpected empty header line")
-            val colon = line.indexOf(':')
-            if (colon <= 0 || !line.substring(0, colon).all(::isTokenCharacter)) {
-                throw malformed("Malformed HTTP header field")
-            }
-            if (line.substring(colon + 1).any { it == '\r' || it == '\n' }) {
-                throw malformed("Malformed HTTP header value")
-            }
+private fun validateHeaders(lines: List<String>) {
+    for (line in lines) {
+        if (line.isEmpty()) throw malformed("Unexpected empty header line")
+        val colon = line.indexOf(':')
+        if (colon <= 0 || !line.substring(0, colon).all(::isTokenCharacter)) {
+            throw malformed("Malformed HTTP header field")
         }
-    }
-
-    private fun parseAuthority(authority: String): Pair<String, Int> {
-        if (authority.isEmpty() || authority.any(::isForbiddenAuthorityCharacter)) {
-            throw malformed("CONNECT authority is invalid")
+        if (line.substring(colon + 1).any { it == '\r' || it == '\n' }) {
+            throw malformed("Malformed HTTP header value")
         }
-
-        val host: String
-        val portText: String
-        if (authority.startsWith('[')) {
-            val closingBracket = authority.indexOf(']')
-            if (closingBracket <= 1 || closingBracket + 1 >= authority.length) {
-                throw malformed("Bracketed CONNECT authority is invalid")
-            }
-            if (authority[closingBracket + 1] != ':' || authority.indexOf('[', 1) >= 0) {
-                throw malformed("Bracketed CONNECT authority is invalid")
-            }
-            host = authority.substring(1, closingBracket)
-            portText = authority.substring(closingBracket + 2)
-            if (!host.contains(':') || !host.all(::isIpv6LiteralCharacter)) {
-                throw malformed("Bracketed host is not an IPv6 literal")
-            }
-        } else {
-            val colon = authority.indexOf(':')
-            if (colon <= 0 || colon != authority.lastIndexOf(':')) {
-                throw malformed("CONNECT authority must contain host and port")
-            }
-            host = authority.substring(0, colon)
-            portText = authority.substring(colon + 1)
-            if (!host.all(::isHostnameCharacter)) {
-                throw malformed("CONNECT hostname is invalid")
-            }
-        }
-
-        if (portText.isEmpty() || !portText.all(Char::isDigit)) {
-            throw malformed("CONNECT port is invalid")
-        }
-        val port = portText.toIntOrNull()
-        if (port == null || port !in 1..65535) throw malformed("CONNECT port is out of range")
-        return host to port
-    }
-
-    private fun malformed(message: String) =
-        ConnectRequestException(ConnectRequestFailure.MALFORMED_REQUEST, message)
-
-    private fun advanceTerminatorState(current: Int, next: Int): Int =
-        when (current) {
-            0 -> if (next == CR) 1 else 0
-            1 ->
-                when (next) {
-                    LF -> 2
-                    CR -> 1
-                    else -> 0
-                }
-            2 -> if (next == CR) 3 else 0
-            3 ->
-                when (next) {
-                    LF -> 4
-                    CR -> 1
-                    else -> 0
-                }
-            else -> current
-        }
-
-    private fun ByteArray.endsWith(suffix: ByteArray): Boolean {
-        if (size < suffix.size) return false
-        for (index in suffix.indices) {
-            if (this[size - suffix.size + index] != suffix[index]) return false
-        }
-        return true
-    }
-
-    private fun isForbiddenAuthorityCharacter(character: Char): Boolean =
-        character.code <= 0x20 || character.code >= 0x7f || character in "/?#@\\"
-
-    private fun isHostnameCharacter(character: Char): Boolean =
-        character.isLetterOrDigit() || character == '.' || character == '-' || character == '_'
-
-    private fun isIpv6LiteralCharacter(character: Char): Boolean =
-        character.isLetterOrDigit() || character == ':' || character == '.' || character == '%' ||
-            character == '-' || character == '_'
-
-    private fun isTokenCharacter(character: Char): Boolean =
-        character.code in 0x21..0x7e && character !in "()<>@,;:\\\"/[]?={} \t"
-
-    private companion object {
-        const val CR = '\r'.code
-        const val LF = '\n'.code
-        val HEADER_TERMINATOR = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
-        val HTTP_WHITESPACE = Regex("[ \\t]+")
     }
 }
+
+private fun parseAuthority(authority: String): Pair<String, Int> {
+    if (authority.isEmpty()) throw malformed("CONNECT authority is invalid")
+    if (authority.any(::isForbiddenAuthorityCharacter)) {
+        throw malformed("CONNECT authority is invalid")
+    }
+    val (host, portText) =
+        if (authority.startsWith('[')) {
+            parseBracketedAuthority(authority)
+        } else {
+            parseHostnameAuthority(authority)
+        }
+    return host to parsePort(portText)
+}
+
+private fun isForbiddenAuthorityCharacter(character: Char): Boolean {
+    if (character.code <= 0x20) return true
+    if (character.code >= 0x7f) return true
+    return character in "/?#@\\"
+}
+
+private fun parseBracketedAuthority(authority: String): Pair<String, String> {
+    val closingBracket = authority.indexOf(']')
+    if (closingBracket <= 1 || closingBracket + 1 >= authority.length) {
+        throw malformed("Bracketed CONNECT authority is invalid")
+    }
+    if (authority[closingBracket + 1] != ':' || authority.indexOf('[', 1) >= 0) {
+        throw malformed("Bracketed CONNECT authority is invalid")
+    }
+    val host = authority.substring(1, closingBracket)
+    if (!host.contains(':') || !host.all(::isIpv6LiteralCharacter)) {
+        throw malformed("Bracketed host is not an IPv6 literal")
+    }
+    return host to authority.substring(closingBracket + 2)
+}
+
+private fun parseHostnameAuthority(authority: String): Pair<String, String> {
+    val colon = authority.indexOf(':')
+    if (colon <= 0 || colon != authority.lastIndexOf(':')) {
+        throw malformed("CONNECT authority must contain host and port")
+    }
+    val host = authority.substring(0, colon)
+    if (!HOSTNAME_PATTERN.matches(host)) throw malformed("CONNECT hostname is invalid")
+    return host to authority.substring(colon + 1)
+}
+
+private fun parsePort(portText: String): Int {
+    if (portText.isEmpty() || !portText.all(Char::isDigit)) {
+        throw malformed("CONNECT port is invalid")
+    }
+    val port = portText.toIntOrNull()
+    if (port == null || port !in 1..65535) throw malformed("CONNECT port is out of range")
+    return port
+}
+
+private fun malformed(message: String) =
+    ConnectRequestException(ConnectRequestFailure.MALFORMED_REQUEST, message)
+
+private fun advanceTerminatorState(current: Int, next: Int): Int =
+    when (current) {
+        0 -> if (next == CR) 1 else 0
+        1 ->
+            when (next) {
+                LF -> 2
+                CR -> 1
+                else -> 0
+            }
+        2 -> if (next == CR) 3 else 0
+        3 ->
+            when (next) {
+                LF -> 4
+                CR -> 1
+                else -> 0
+            }
+        else -> current
+    }
+
+private fun isIpv6LiteralCharacter(character: Char): Boolean =
+    character.isLetterOrDigit() ||
+        character == ':' ||
+        character == '.' ||
+        character == '%' ||
+        character == '-' ||
+        character == '_'
+
+private fun isTokenCharacter(character: Char): Boolean =
+    character.code in 0x21..0x7e && character !in "()<>@,;:\\\"/[]?={} \t"
+
+private const val CR = '\r'.code
+private const val LF = '\n'.code
+private val HEADER_TERMINATOR =
+    byteArrayOf(
+        '\r'.code.toByte(),
+        '\n'.code.toByte(),
+        '\r'.code.toByte(),
+        '\n'.code.toByte(),
+    )
+private val HTTP_WHITESPACE = Regex("[ \\t]+")
+private val HOSTNAME_PATTERN = Regex("[A-Za-z0-9._-]+")

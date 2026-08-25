@@ -1,6 +1,5 @@
 package dev.armin.ui
 
-import android.graphics.Color
 import android.os.Bundle
 import android.text.Editable
 import android.text.InputType
@@ -15,21 +14,17 @@ import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.webkit.ProxyConfig
-import androidx.webkit.ProxyController
-import androidx.webkit.WebViewFeature
+import dev.armin.R
 import dev.armin.browser.BrowserController
 import dev.armin.browser.BrowserUiCallbacks
-import dev.armin.proxy.LocalConnectProxy
-import java.net.InetSocketAddress
-import java.util.concurrent.Executor
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
+// This Activity intentionally owns the small app's view and lifecycle coordination.
+@Suppress("TooManyFunctions")
 class MainActivity : ComponentActivity(), BrowserUiCallbacks {
     private lateinit var root: FrameLayout
     private lateinit var browserContent: LinearLayout
@@ -37,13 +32,9 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
     private lateinit var addressBar: EditText
     private lateinit var fullscreenController: FullscreenVideoController
 
-    private val startupExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val destroyed = AtomicBoolean(false)
-    private val cleanupStarted = AtomicBoolean(false)
-    private val mainThreadExecutor = Executor { command -> runOnUiThread(command) }
 
-    @Volatile private var localProxy: LocalConnectProxy? = null
-    private var proxyOverrideRequested = false
+    private var proxyLease: WebViewProxyLease? = null
     private var browserController: BrowserController? = null
     private var suppressAddressWatcher = false
     private var webViewDestroyed = false
@@ -54,11 +45,7 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
         createBrowserViews()
         installBackHandling()
 
-        if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
-            showStartupError("이 기기의 WebView는 앱 프록시를 지원하지 않습니다.")
-            return
-        }
-        startAndApplyProxy()
+        acquireProxySession()
     }
 
     override fun replaceAddress(value: String, requestFocus: Boolean) {
@@ -73,7 +60,10 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
             addressBar.requestFocus()
             addressBar.post {
                 getSystemService(android.view.inputmethod.InputMethodManager::class.java)
-                    .showSoftInput(addressBar, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+                    .showSoftInput(
+                        addressBar,
+                        0,
+                    )
             }
         }
     }
@@ -83,8 +73,9 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
     }
 
     override fun onRendererTerminated() {
-        browserController?.close()
+        // BrowserController deliberately avoids touching a crashed WebView in this path.
         browserController = null
+        fullscreenController.discardAfterRendererGone()
         webView.destroy()
         webViewDestroyed = true
         Toast.makeText(this, "웹 렌더러가 종료되어 브라우저를 닫습니다.", Toast.LENGTH_LONG).show()
@@ -97,14 +88,16 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
         browserController?.close()
         browserController = null
         if (!webViewDestroyed) webView.destroy()
-        cleanupProxy()
-        startupExecutor.shutdownNow()
+        proxyLease?.close()
+        proxyLease = null
         super.onDestroy()
     }
 
+    @Suppress("DEPRECATION")
     private fun configureWindow() {
-        window.statusBarColor = Color.BLACK
-        window.navigationBarColor = Color.BLACK
+        val black = ContextCompat.getColor(this, R.color.black)
+        window.statusBarColor = black
+        window.navigationBarColor = black
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowCompat.getInsetsController(window, window.decorView).apply {
             isAppearanceLightStatusBars = false
@@ -113,19 +106,24 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
     }
 
     private fun createBrowserViews() {
-        root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        val black = ContextCompat.getColor(this, R.color.black)
+        root = FrameLayout(this).apply { setBackgroundColor(black) }
         browserContent =
             LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setBackgroundColor(Color.BLACK)
+                setBackgroundColor(black)
             }
-        webView = WebView(this).apply { setBackgroundColor(Color.BLACK) }
+        webView = WebView(this).apply { setBackgroundColor(black) }
         addressBar =
             EditText(this).apply {
                 setSingleLine(true)
-                setTextColor(Color.WHITE)
-                setHintTextColor(Color.GRAY)
-                setBackgroundColor(Color.rgb(24, 24, 24))
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.address_bar_text))
+                setHintTextColor(
+                    ContextCompat.getColor(this@MainActivity, R.color.address_bar_hint)
+                )
+                setBackgroundColor(
+                    ContextCompat.getColor(this@MainActivity, R.color.address_bar_background)
+                )
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
                 imeOptions = EditorInfo.IME_ACTION_GO or EditorInfo.IME_FLAG_NO_EXTRACT_UI
                 isEnabled = false
@@ -221,6 +219,9 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
                 false
             }
         }
+        addressBar.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) browserController?.onAddressEditingFinished()
+        }
     }
 
     private fun installBackHandling() {
@@ -238,50 +239,27 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
         )
     }
 
-    private fun startAndApplyProxy() {
-        startupExecutor.execute {
-            val proxy = LocalConnectProxy()
-            try {
-                val address = proxy.start()
-                localProxy = proxy
-                if (destroyed.get()) {
-                    proxy.close()
-                    return@execute
-                }
-                runOnUiThread { applyProxyOverride(address) }
-            } catch (_: Exception) {
-                proxy.close()
-                if (!destroyed.get()) {
-                    runOnUiThread { showStartupError("로컬 프록시를 시작하지 못했습니다.") }
-                }
-            }
-        }
-    }
+    private fun acquireProxySession() {
+        proxyLease =
+            WebViewProxySession.acquire(
+                object : ProxySessionCallbacks {
+                    override fun onProxyReady() {
+                        if (!destroyed.get()) initializeBrowserAfterProxyReady()
+                    }
 
-    private fun applyProxyOverride(address: InetSocketAddress) {
-        if (destroyed.get()) return
-        val proxyConfig =
-            ProxyConfig.Builder()
-                .addProxyRule(
-                    "${address.hostString}:${address.port}",
-                    ProxyConfig.MATCH_HTTPS,
-                )
-                .removeImplicitRules()
-                .build()
-        proxyOverrideRequested = true
-        try {
-            ProxyController.getInstance()
-                .setProxyOverride(proxyConfig, mainThreadExecutor) {
-                    if (destroyed.get()) {
-                        cleanupProxy()
-                    } else {
-                        initializeBrowserAfterProxyReady()
+                    override fun onProxyFailure(failure: ProxySessionFailure) {
+                        if (destroyed.get()) return
+                        val message =
+                            when (failure) {
+                                ProxySessionFailure.UNSUPPORTED ->
+                                    "이 기기의 WebView는 앱 프록시를 지원하지 않습니다."
+                                ProxySessionFailure.START_FAILED -> "로컬 프록시를 시작하지 못했습니다."
+                                ProxySessionFailure.OVERRIDE_FAILED -> "WebView 프록시를 적용하지 못했습니다."
+                            }
+                        showStartupError(message)
                     }
                 }
-        } catch (_: RuntimeException) {
-            showStartupError("WebView 프록시를 적용하지 못했습니다.")
-            cleanupProxy()
-        }
+            )
     }
 
     private fun initializeBrowserAfterProxyReady() {
@@ -289,27 +267,6 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
         browserController = BrowserController(webView, this, fullscreenController)
         addressBar.isEnabled = true
         addressBar.requestFocus()
-    }
-
-    private fun cleanupProxy() {
-        if (!cleanupStarted.compareAndSet(false, true)) return
-        val closeProxy = Runnable {
-            localProxy?.close()
-            localProxy = null
-        }
-        if (proxyOverrideRequested) {
-            runCatching {
-                    ProxyController.getInstance()
-                        .clearProxyOverride(mainThreadExecutor, closeProxy)
-                }
-                .onFailure { closeProxy.run() }
-            // The callback is normally prompt, but shutdown must not leak the listening socket if
-            // a WebView provider process dies before invoking it. LocalConnectProxy.close is
-            // idempotent, so the callback may safely repeat this operation.
-            closeProxy.run()
-        } else {
-            closeProxy.run()
-        }
     }
 
     private fun showStartupError(message: String) {

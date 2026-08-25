@@ -37,8 +37,7 @@ class TlsClientHelloReader(
                 ReadOutcome.COMPLETE -> Unit
                 ReadOutcome.END_OF_STREAM ->
                     return fallback(captured, ClientHelloFailure.TRUNCATED_INPUT)
-                ReadOutcome.TIMEOUT ->
-                    return fallback(captured, ClientHelloFailure.READ_TIMEOUT)
+                ReadOutcome.TIMEOUT -> return fallback(captured, ClientHelloFailure.READ_TIMEOUT)
             }
 
             val current = captured.toByteArray()
@@ -54,8 +53,7 @@ class TlsClientHelloReader(
                 ReadOutcome.COMPLETE -> Unit
                 ReadOutcome.END_OF_STREAM ->
                     return fallback(captured, ClientHelloFailure.TRUNCATED_INPUT)
-                ReadOutcome.TIMEOUT ->
-                    return fallback(captured, ClientHelloFailure.READ_TIMEOUT)
+                ReadOutcome.TIMEOUT -> return fallback(captured, ClientHelloFailure.READ_TIMEOUT)
             }
             records += 1
 

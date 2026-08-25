@@ -38,8 +38,8 @@ android {
         abortOnError = true
         checkDependencies = true
         checkReleaseBuilds = true
-        htmlReport = true
-        textReport = true
+        // Toolchain upgrades are deliberate because Nix hashes and the offline cache change too.
+        disable += "AndroidGradlePluginVersion"
     }
 
     packaging {

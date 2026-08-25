@@ -22,6 +22,12 @@ enum class TunnelEndReason {
     EXECUTOR_REJECTED,
 }
 
+data class TunnelEndpoint(
+    val socket: Socket,
+    val input: InputStream = socket.getInputStream(),
+    val output: OutputStream = socket.getOutputStream(),
+)
+
 /** Relays bytes in both directions and closes both sockets as soon as either pump terminates. */
 class BidirectionalTunnel(
     private val reversePumpExecutor: ExecutorService,
@@ -37,37 +43,32 @@ class BidirectionalTunnel(
         require(bufferBytes > 0) { "bufferBytes must be positive" }
     }
 
-    fun relay(
-        leftSocket: Socket,
-        rightSocket: Socket,
-        leftInput: InputStream = leftSocket.getInputStream(),
-        leftOutput: OutputStream = leftSocket.getOutputStream(),
-        rightInput: InputStream = rightSocket.getInputStream(),
-        rightOutput: OutputStream = rightSocket.getOutputStream(),
-    ): TunnelEndReason {
-        leftSocket.soTimeout = pollTimeoutMillis
-        rightSocket.soTimeout = pollTimeoutMillis
+    fun relay(left: TunnelEndpoint, right: TunnelEndpoint): TunnelEndReason {
+        left.socket.soTimeout = pollTimeoutMillis
+        right.socket.soTimeout = pollTimeoutMillis
 
         val lastActivityNanos = AtomicLong(System.nanoTime())
         val endReason = AtomicReference<TunnelEndReason>()
         val finish: (TunnelEndReason) -> Unit = { reason ->
             if (endReason.compareAndSet(null, reason)) {
-                closeQuietly(leftSocket)
-                closeQuietly(rightSocket)
+                closeQuietly(left.socket)
+                closeQuietly(right.socket)
             }
         }
 
         val reverseFuture =
             try {
                 reversePumpExecutor.submit {
-                    finish(copy(rightInput, leftOutput, lastActivityNanos, leftSocket, rightSocket))
+                    finish(
+                        copy(right.input, left.output, lastActivityNanos, left.socket, right.socket)
+                    )
                 }
             } catch (_: RejectedExecutionException) {
                 finish(TunnelEndReason.EXECUTOR_REJECTED)
                 return endReason.get()
             }
 
-        finish(copy(leftInput, rightOutput, lastActivityNanos, leftSocket, rightSocket))
+        finish(copy(left.input, right.output, lastActivityNanos, left.socket, right.socket))
 
         try {
             reverseFuture.get(cleanupWaitMillis(), TimeUnit.MILLISECONDS)
@@ -79,8 +80,8 @@ class BidirectionalTunnel(
         } catch (_: TimeoutException) {
             reverseFuture.cancel(true)
         } finally {
-            closeQuietly(leftSocket)
-            closeQuietly(rightSocket)
+            closeQuietly(left.socket)
+            closeQuietly(right.socket)
         }
         return endReason.get() ?: TunnelEndReason.CLOSED
     }
@@ -94,40 +95,65 @@ class BidirectionalTunnel(
     ): TunnelEndReason {
         val buffer = ByteArray(bufferBytes)
         while (!Thread.currentThread().isInterrupted) {
-            val count =
-                try {
-                    input.read(buffer)
-                } catch (_: SocketTimeoutException) {
+            when (val read = readChunk(input, buffer, leftSocket, rightSocket)) {
+                PumpRead.Timeout -> {
                     if (hasBeenIdle(lastActivityNanos.get())) return TunnelEndReason.IDLE_TIMEOUT
                     continue
-                } catch (_: SocketException) {
-                    return if (leftSocket.isClosed || rightSocket.isClosed) {
-                        TunnelEndReason.CLOSED
-                    } else {
-                        TunnelEndReason.IO_ERROR
+                }
+                PumpRead.EndOfStream -> return TunnelEndReason.END_OF_STREAM
+                is PumpRead.Failed -> return read.reason
+                is PumpRead.Bytes -> {
+                    if (read.count == 0) continue
+                    lastActivityNanos.set(System.nanoTime())
+                    writeChunk(output, buffer, read.count, leftSocket, rightSocket)?.let {
+                        return it
                     }
-                } catch (_: IOException) {
-                    return TunnelEndReason.IO_ERROR
                 }
-
-            if (count < 0) return TunnelEndReason.END_OF_STREAM
-            if (count == 0) continue
-            lastActivityNanos.set(System.nanoTime())
-            try {
-                output.write(buffer, 0, count)
-                output.flush()
-            } catch (_: SocketException) {
-                return if (leftSocket.isClosed || rightSocket.isClosed) {
-                    TunnelEndReason.CLOSED
-                } else {
-                    TunnelEndReason.IO_ERROR
-                }
-            } catch (_: IOException) {
-                return TunnelEndReason.IO_ERROR
             }
         }
         return TunnelEndReason.CLOSED
     }
+
+    private fun readChunk(
+        input: InputStream,
+        buffer: ByteArray,
+        leftSocket: Socket,
+        rightSocket: Socket,
+    ): PumpRead =
+        try {
+            val count = input.read(buffer)
+            if (count < 0) PumpRead.EndOfStream else PumpRead.Bytes(count)
+        } catch (_: SocketTimeoutException) {
+            PumpRead.Timeout
+        } catch (_: SocketException) {
+            PumpRead.Failed(socketFailureReason(leftSocket, rightSocket))
+        } catch (_: IOException) {
+            PumpRead.Failed(TunnelEndReason.IO_ERROR)
+        }
+
+    private fun writeChunk(
+        output: OutputStream,
+        buffer: ByteArray,
+        count: Int,
+        leftSocket: Socket,
+        rightSocket: Socket,
+    ): TunnelEndReason? =
+        try {
+            output.write(buffer, 0, count)
+            output.flush()
+            null
+        } catch (_: SocketException) {
+            socketFailureReason(leftSocket, rightSocket)
+        } catch (_: IOException) {
+            TunnelEndReason.IO_ERROR
+        }
+
+    private fun socketFailureReason(leftSocket: Socket, rightSocket: Socket): TunnelEndReason =
+        if (leftSocket.isClosed || rightSocket.isClosed) {
+            TunnelEndReason.CLOSED
+        } else {
+            TunnelEndReason.IO_ERROR
+        }
 
     private fun hasBeenIdle(lastActivityNanos: Long): Boolean =
         System.nanoTime() - lastActivityNanos >=
@@ -141,5 +167,15 @@ class BidirectionalTunnel(
         } catch (_: IOException) {
             // Best-effort cleanup.
         }
+    }
+
+    private sealed interface PumpRead {
+        data class Bytes(val count: Int) : PumpRead
+
+        data class Failed(val reason: TunnelEndReason) : PumpRead
+
+        data object Timeout : PumpRead
+
+        data object EndOfStream : PumpRead
     }
 }

@@ -31,8 +31,8 @@ sealed interface ClientHelloParseResult {
 /**
  * Parses a ClientHello from one or more complete TLS handshake records.
  *
- * The parser retains a logical-handshake-byte to encoded-record-byte mapping, so an SNI value
- * split across TLS record boundaries can still be split without rewriting the records.
+ * The parser retains a logical-handshake-byte to encoded-record-byte mapping, so an SNI value split
+ * across TLS record boundaries can still be split without rewriting the records.
  */
 class TlsClientHelloParser(private val maxEncodedBytes: Int = 64 * 1024) {
     init {
@@ -49,6 +49,8 @@ class TlsClientHelloParser(private val maxEncodedBytes: Int = 64 * 1024) {
                 ClientHelloParseResult.Failure(ClientHelloFailure.TRUNCATED_INPUT)
         }
 
+    // TLS framing is deliberately validated branch-by-branch before any offset is dereferenced.
+    @Suppress("CyclomaticComplexMethod")
     internal fun inspect(recordBytes: ByteArray): Inspection {
         if (recordBytes.size > maxEncodedBytes) {
             return Inspection.Invalid(ClientHelloFailure.TOO_LARGE)
@@ -101,7 +103,13 @@ class TlsClientHelloParser(private val maxEncodedBytes: Int = 64 * 1024) {
 
             val expected = expectedHandshakeLength
             if (expected != null && logicalBytes.size >= expected) {
-                return parseCompleteClientHello(logicalBytes, encodedPositions, expected)
+                return try {
+                    Inspection.Complete(
+                        parseCompleteClientHello(logicalBytes, encodedPositions, expected)
+                    )
+                } catch (failure: ClientHelloParseException) {
+                    Inspection.Invalid(failure.reason)
+                }
             }
 
             encodedOffset = recordEnd.toInt()
@@ -113,65 +121,66 @@ class TlsClientHelloParser(private val maxEncodedBytes: Int = 64 * 1024) {
         bytes: ByteArray,
         encodedPositions: List<Int>,
         handshakeLength: Int,
-    ): Inspection {
-        return try {
-            val cursor = Cursor(bytes, HANDSHAKE_HEADER_SIZE, handshakeLength)
-            cursor.skip(2) // legacy_version
-            cursor.skip(32) // random
+    ): TlsClientHello {
+        val cursor = Cursor(bytes, HANDSHAKE_HEADER_SIZE, handshakeLength)
+        cursor.skip(2) // legacy_version
+        cursor.skip(32) // random
 
-            val sessionIdLength = cursor.readUnsignedByte()
-            if (sessionIdLength > MAX_SESSION_ID_BYTES) malformedClientHello()
-            cursor.skip(sessionIdLength)
+        val sessionIdLength = cursor.readUnsignedByte()
+        if (sessionIdLength > MAX_SESSION_ID_BYTES) malformedClientHello()
+        cursor.skip(sessionIdLength)
 
-            val cipherSuitesLength = cursor.readUnsignedShort()
-            if (cipherSuitesLength == 0 || cipherSuitesLength % 2 != 0) malformedClientHello()
-            cursor.skip(cipherSuitesLength)
+        val cipherSuitesLength = cursor.readUnsignedShort()
+        if (cipherSuitesLength == 0 || cipherSuitesLength % 2 != 0) malformedClientHello()
+        cursor.skip(cipherSuitesLength)
 
-            val compressionMethodsLength = cursor.readUnsignedByte()
-            if (compressionMethodsLength == 0) malformedClientHello()
-            cursor.skip(compressionMethodsLength)
+        val compressionMethodsLength = cursor.readUnsignedByte()
+        if (compressionMethodsLength == 0) malformedClientHello()
+        cursor.skip(compressionMethodsLength)
 
-            if (cursor.position == handshakeLength) {
-                return Inspection.Complete(
-                    TlsClientHello(null, emptyList(), handshakeLength),
-                )
-            }
-
-            val extensionsLength = cursor.readUnsignedShort()
-            val extensionsEnd = cursor.position.toLong() + extensionsLength
-            if (extensionsEnd != handshakeLength.toLong()) malformedExtension()
-
-            var serverNameExtensionSeen = false
-            var serverName: String? = null
-            var serverNameRanges: List<IntRange> = emptyList()
-            while (cursor.position < handshakeLength) {
-                val extensionType = cursor.readUnsignedShort()
-                val extensionLength = cursor.readUnsignedShort()
-                val extensionEnd = cursor.position.toLong() + extensionLength
-                if (extensionEnd > handshakeLength) malformedExtension()
-
-                if (extensionType == SERVER_NAME_EXTENSION_TYPE) {
-                    if (serverNameExtensionSeen) malformedExtension()
-                    serverNameExtensionSeen = true
-                    val parsed =
-                        parseServerNameExtension(
-                            bytes,
-                            cursor.position,
-                            extensionEnd.toInt(),
-                            encodedPositions,
-                        )
-                    serverName = parsed?.name
-                    serverNameRanges = parsed?.encodedRanges ?: emptyList()
-                }
-                cursor.position = extensionEnd.toInt()
-            }
-
-            Inspection.Complete(
-                TlsClientHello(serverName, serverNameRanges, handshakeLength),
-            )
-        } catch (failure: ClientHelloParseException) {
-            Inspection.Invalid(failure.reason)
+        if (cursor.position == handshakeLength) {
+            return TlsClientHello(null, emptyList(), handshakeLength)
         }
+
+        val extensionsLength = cursor.readUnsignedShort()
+        val extensionsEnd = cursor.position.toLong() + extensionsLength
+        if (extensionsEnd != handshakeLength.toLong()) malformedExtension()
+        val serverName = parseExtensions(bytes, encodedPositions, cursor, handshakeLength)
+        return TlsClientHello(
+            serverName?.name,
+            serverName?.encodedRanges ?: emptyList(),
+            handshakeLength,
+        )
+    }
+
+    private fun parseExtensions(
+        bytes: ByteArray,
+        encodedPositions: List<Int>,
+        cursor: Cursor,
+        handshakeLength: Int,
+    ): ParsedServerName? {
+        var serverNameExtensionSeen = false
+        var serverName: ParsedServerName? = null
+        while (cursor.position < handshakeLength) {
+            val extensionType = cursor.readUnsignedShort()
+            val extensionLength = cursor.readUnsignedShort()
+            val extensionEnd = cursor.position.toLong() + extensionLength
+            if (extensionEnd > handshakeLength) malformedExtension()
+
+            if (extensionType == SERVER_NAME_EXTENSION_TYPE) {
+                if (serverNameExtensionSeen) malformedExtension()
+                serverNameExtensionSeen = true
+                serverName =
+                    parseServerNameExtension(
+                        bytes,
+                        cursor.position,
+                        extensionEnd.toInt(),
+                        encodedPositions,
+                    )
+            }
+            cursor.position = extensionEnd.toInt()
+        }
+        return serverName
     }
 
     private fun parseServerNameExtension(
@@ -188,33 +197,54 @@ class TlsClientHelloParser(private val maxEncodedBytes: Int = 64 * 1024) {
         var cursor = namesStart
         var parsedName: ParsedServerName? = null
         while (cursor < end) {
-            if (end - cursor < 3) malformedExtension()
-            val nameType = unsigned(bytes[cursor])
-            val nameLength = readNetworkUnsignedShort(bytes, cursor + 1)
-            val nameStart = cursor + 3
-            val nameEnd = nameStart.toLong() + nameLength
-            if (nameEnd > end) malformedExtension()
-
-            if (nameType == HOST_NAME_TYPE) {
-                if (parsedName != null || nameLength !in 1..MAX_SERVER_NAME_BYTES) {
-                    malformedExtension()
-                }
-                for (index in nameStart until nameEnd.toInt()) {
-                    val value = unsigned(bytes[index])
-                    if (value !in PRINTABLE_ASCII_RANGE) malformedExtension()
-                }
-                val name =
-                    String(bytes, nameStart, nameLength, StandardCharsets.US_ASCII)
-                val positions =
-                    (nameStart until nameEnd.toInt()).map { logicalIndex ->
-                        encodedPositions.getOrElse(logicalIndex) { malformedExtension() }
-                    }
-                parsedName = ParsedServerName(name, collapseContiguousPositions(positions))
+            val entry = parseServerNameEntry(bytes, cursor, end, encodedPositions)
+            if (entry.serverName != null) {
+                if (parsedName != null) malformedExtension()
+                parsedName = entry.serverName
             }
-            cursor = nameEnd.toInt()
+            cursor = entry.end
         }
         if (cursor != end) malformedExtension()
         return parsedName
+    }
+
+    private fun parseServerNameEntry(
+        bytes: ByteArray,
+        start: Int,
+        limit: Int,
+        encodedPositions: List<Int>,
+    ): ParsedServerNameEntry {
+        if (limit - start < 3) malformedExtension()
+        val nameType = unsigned(bytes[start])
+        val nameLength = readNetworkUnsignedShort(bytes, start + 1)
+        val nameStart = start + 3
+        val nameEnd = nameStart.toLong() + nameLength
+        if (nameEnd > limit) malformedExtension()
+        val parsed =
+            if (nameType == HOST_NAME_TYPE) {
+                parseHostName(bytes, nameStart, nameLength, encodedPositions)
+            } else {
+                null
+            }
+        return ParsedServerNameEntry(nameEnd.toInt(), parsed)
+    }
+
+    private fun parseHostName(
+        bytes: ByteArray,
+        start: Int,
+        length: Int,
+        encodedPositions: List<Int>,
+    ): ParsedServerName {
+        if (length !in 1..MAX_SERVER_NAME_BYTES) malformedExtension()
+        for (index in start until start + length) {
+            if (unsigned(bytes[index]) !in PRINTABLE_ASCII_RANGE) malformedExtension()
+        }
+        val name = String(bytes, start, length, StandardCharsets.US_ASCII)
+        val positions =
+            (start until start + length).map { logicalIndex ->
+                encodedPositions.getOrElse(logicalIndex) { malformedExtension() }
+            }
+        return ParsedServerName(name, collapseContiguousPositions(positions))
     }
 
     private fun collapseContiguousPositions(positions: List<Int>): List<IntRange> {
@@ -270,6 +300,8 @@ class TlsClientHelloParser(private val maxEncodedBytes: Int = 64 * 1024) {
     }
 
     private data class ParsedServerName(val name: String, val encodedRanges: List<IntRange>)
+
+    private data class ParsedServerNameEntry(val end: Int, val serverName: ParsedServerName?)
 
     private companion object {
         const val TLS_RECORD_HEADER_SIZE = 5

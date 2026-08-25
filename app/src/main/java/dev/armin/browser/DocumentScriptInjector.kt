@@ -38,7 +38,7 @@ object DefaultDocumentBootstrap : DocumentBootstrapSource {
 
 /** Single installation point for future cosmetic/scriptlet bootstrap generation. */
 class DocumentScriptInjector(
-    private val bootstrapSource: DocumentBootstrapSource = DefaultDocumentBootstrap,
+    private val bootstrapSource: DocumentBootstrapSource = DefaultDocumentBootstrap
 ) : AutoCloseable {
     private var handler: ScriptHandler? = null
     private var mode: DocumentScriptMode? = null
@@ -66,6 +66,12 @@ class DocumentScriptInjector(
 
     override fun close() {
         handler?.remove()
+        handler = null
+        mode = null
+    }
+
+    /** Renderer loss already removed its script world; do not call its dead provider again. */
+    fun discardAfterRendererGone() {
         handler = null
         mode = null
     }

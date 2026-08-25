@@ -24,7 +24,10 @@
       packages = forAllSystems (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+            config.allowUnfree = true;
+          };
           androidSdk = android-nixpkgs.sdk.${system} (
             sdkPkgs: with sdkPkgs; [
               build-tools-37-0-0
@@ -156,7 +159,10 @@
       devShells = forAllSystems (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+            config.allowUnfree = true;
+          };
           androidSdk = self.packages.${system}.androidSdk;
           androidHome = "${androidSdk}/share/android-sdk";
           java = pkgs.jdk17;

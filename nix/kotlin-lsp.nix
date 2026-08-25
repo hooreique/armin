@@ -54,9 +54,11 @@ stdenvNoCC.mkDerivation {
 
     mkdir -p "$out/bin" "$out/libexec/kotlin-lsp"
     cp -R . "$out/libexec/kotlin-lsp"
-    makeWrapper "$out/libexec/kotlin-lsp/bin/intellij-server" "$out/bin/kotlin-lsp" \
-      --set JAVA_HOME ${jdk25.home} \
-      --prefix PATH : ${lib.makeBinPath [ jdk25 ]}
+    for launcher in kotlin-lsp intellij-server; do
+      makeWrapper "$out/libexec/kotlin-lsp/bin/intellij-server" "$out/bin/$launcher" \
+        --set JAVA_HOME ${jdk25.home} \
+        --prefix PATH : ${lib.makeBinPath [ jdk25 ]}
+    done
 
     runHook postInstall
   '';
@@ -64,12 +66,20 @@ stdenvNoCC.mkDerivation {
   meta = {
     description = "Official Kotlin language server by JetBrains";
     homepage = "https://github.com/Kotlin/kotlin-lsp";
-    license = lib.licenses.asl20;
+    # The source is Apache-2.0; the official standalone archive also bundles
+    # JetBrains components distributed under non-free terms.
+    license = [
+      lib.licenses.asl20
+      lib.licenses.unfreeRedistributable
+    ];
     mainProgram = "kotlin-lsp";
     platforms = [
       "aarch64-linux"
       "x86_64-linux"
     ];
-    sourceProvenance = with lib.sourceTypes; [ binaryBytecode ];
+    sourceProvenance = with lib.sourceTypes; [
+      binaryBytecode
+      binaryNativeCode
+    ];
   };
 }

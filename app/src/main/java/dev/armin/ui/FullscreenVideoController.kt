@@ -33,8 +33,7 @@ class FullscreenVideoController(
 
         ViewCompat.getRootWindowInsets(root)?.let { insets ->
             statusBarWasVisible = insets.isVisible(WindowInsetsCompat.Type.statusBars())
-            navigationBarWasVisible =
-                insets.isVisible(WindowInsetsCompat.Type.navigationBars())
+            navigationBarWasVisible = insets.isVisible(WindowInsetsCompat.Type.navigationBars())
         }
         previousOrientation = activity.requestedOrientation
 
@@ -43,7 +42,9 @@ class FullscreenVideoController(
 
         customView = view
         customViewCallback = callback
-        view.setBackgroundColor(android.graphics.Color.BLACK)
+        view.setBackgroundColor(
+            androidx.core.content.ContextCompat.getColor(activity, dev.armin.R.color.black)
+        )
         root.addView(
             view,
             FrameLayout.LayoutParams(
@@ -71,6 +72,10 @@ class FullscreenVideoController(
 
     fun destroy() {
         finishFullscreen(notifyWebView = true)
+    }
+
+    fun discardAfterRendererGone() {
+        finishFullscreen(notifyWebView = false)
     }
 
     private fun finishFullscreen(notifyWebView: Boolean) {

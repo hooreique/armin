@@ -16,6 +16,11 @@ class UrlNormalizerTest {
     }
 
     @Test
+    fun `path dot segments are normalized like WebView callbacks`() {
+        assertValid("example.com/a/../b?q=1", "https://example.com/b?q=1")
+    }
+
+    @Test
     fun `explicit HTTPS is accepted`() {
         assertValid("https://example.com", "https://example.com")
     }
@@ -74,6 +79,12 @@ class UrlNormalizerTest {
     }
 
     @Test
+    fun `canonical IPv4 is accepted but legacy numeric forms are rejected`() {
+        assertValid("127.0.0.1", "https://127.0.0.1")
+        listOf("127.1", "0x7F.0x1", "0177.01", "2130706433").forEach(::assertInvalid)
+    }
+
+    @Test
     fun `invalid ports are blocked`() {
         listOf(
                 "example.com:",
@@ -87,7 +98,10 @@ class UrlNormalizerTest {
 
     @Test
     fun `display omits only HTTPS scheme`() {
-        assertEquals("example.com/a?q=1#f", UrlNormalizer.displayText("https://example.com/a?q=1#f"))
+        assertEquals(
+            "example.com/a?q=1#f",
+            UrlNormalizer.displayText("https://example.com/a?q=1#f"),
+        )
         assertEquals("http://example.com/a", UrlNormalizer.displayText("http://example.com/a"))
     }
 

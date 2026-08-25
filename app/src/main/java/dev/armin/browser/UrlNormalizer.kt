@@ -59,11 +59,14 @@ object UrlNormalizer {
         if (uri.host.isNullOrBlank()) {
             return UrlNormalizationResult.Invalid(InvalidUrlReason.MISSING_HOST)
         }
+        if (isNonCanonicalIpv4(uri.host)) {
+            return UrlNormalizationResult.Invalid(InvalidUrlReason.MALFORMED_URL)
+        }
         if (uri.port == 0 || uri.port > MAX_PORT) {
             return UrlNormalizationResult.Invalid(InvalidUrlReason.INVALID_PORT)
         }
 
-        val ascii = uri.toASCIIString()
+        val ascii = uri.normalize().toASCIIString()
         val normalizedScheme = HTTPS_SCHEME + ascii.substring(uri.scheme.length)
         return UrlNormalizationResult.Valid(normalizedScheme)
     }
@@ -97,7 +100,19 @@ object UrlNormalizer {
     private fun unsupportedScheme() =
         UrlNormalizationResult.Invalid(InvalidUrlReason.UNSUPPORTED_SCHEME)
 
+    /** Reject legacy numeric forms that Chromium rewrites to a different IPv4 address string. */
+    private fun isNonCanonicalIpv4(host: String): Boolean {
+        if (!IPV4_NUMBER_CANDIDATE.matches(host)) return false
+        val octets = host.split('.')
+        return octets.size != 4 ||
+            octets.any { octet ->
+                (octet.length > 1 && octet.startsWith('0')) || octet.toIntOrNull() !in 0..255
+            }
+    }
+
     private const val HTTPS_SCHEME = "https"
     private const val HTTPS_PREFIX = "https://"
     private const val MAX_PORT = 65_535
+    private val IPV4_NUMBER_CANDIDATE =
+        Regex("^(?:0x[0-9a-f]+|[0-9]+)(?:\\.(?:0x[0-9a-f]+|[0-9]+))*\\.?$", RegexOption.IGNORE_CASE)
 }

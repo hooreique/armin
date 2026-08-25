@@ -39,6 +39,35 @@ class NavigationStateMachineTest {
     }
 
     @Test
+    fun `userinfo cannot match or consume an app allowance`() {
+        val state = NavigationStateMachine()
+        state.beginAppIssuedNavigation("https://example.com/path")
+
+        assertEquals(
+            NavigationDecision.BlockAndPresent("https://user:password@example.com/path"),
+            state.evaluate(
+                request(
+                    "https://user:password@example.com/path",
+                    gesture = false,
+                    redirect = null,
+                )
+            ),
+        )
+        assertFalse(
+            NavigationStateMachine.equivalent(
+                "https://alice:one@example.com/path",
+                "https://bob:two@example.com/path",
+            )
+        )
+        assertFalse(
+            NavigationStateMachine.equivalent(
+                "https://alice:one@example.com/path",
+                "https://alice:one@example.com/path",
+            )
+        )
+    }
+
+    @Test
     fun `direct HTTPS gesture is allowed but direct HTTP gesture is blocked`() {
         val state = NavigationStateMachine()
 
@@ -53,12 +82,190 @@ class NavigationStateMachineTest {
     }
 
     @Test
+    fun `gesture-backed script navigation that is not an ordinary link is blocked`() {
+        val state = NavigationStateMachine("https://origin.example")
+
+        val decision =
+            state.evaluate(
+                MainFrameNavigationRequest(
+                    url = "https://script.example/path",
+                    hasGesture = true,
+                    isRedirect = false,
+                    isDirectLink = false,
+                )
+            )
+
+        assertEquals(
+            NavigationDecision.BlockAndPresent("https://script.example/path"),
+            decision,
+        )
+    }
+
+    @Test
     fun `gesture-less movement is blocked when redirect metadata is unavailable`() {
         val state = NavigationStateMachine()
 
         assertEquals(
             NavigationDecision.BlockAndPresent("https://example.com/automatic"),
             state.evaluate(request("https://example.com/automatic", gesture = false)),
+        )
+    }
+
+    @Test
+    fun `normalized callback matches an app URL containing dot segments`() {
+        val state = NavigationStateMachine()
+        state.beginAppIssuedNavigation("https://example.com/a/../b")
+
+        assertEquals(
+            NavigationDecision.Allow,
+            state.evaluate(request("https://example.com/b", gesture = false, redirect = false)),
+        )
+        assertTrue(state.onPageEvent("https://example.com/b"))
+    }
+
+    @Test
+    fun `Chromium encoded dot segments match a canonical callback path`() {
+        listOf("%2e%2e", "%2E.", ".%2e", "..").forEach { parentSegment ->
+            val state = NavigationStateMachine()
+            state.beginAppIssuedNavigation("https://example.com/a/$parentSegment/b?q=%2e#%2e")
+
+            assertEquals(
+                NavigationDecision.Allow,
+                state.evaluate(
+                    request("https://example.com/b?q=%2E#%2E", gesture = false, redirect = false)
+                ),
+            )
+            assertTrue(state.onPageEvent("https://example.com/b?q=%2E#%2E"))
+        }
+    }
+
+    @Test
+    fun `encoded dots inside an ordinary segment are preserved`() {
+        assertFalse(
+            NavigationStateMachine.equivalent(
+                "https://example.com/foo%2ebar",
+                "https://example.com/foobar",
+            )
+        )
+        assertTrue(
+            NavigationStateMachine.equivalent(
+                "https://example.com/a/../../../b",
+                "https://example.com/b",
+            )
+        )
+        assertFalse(
+            NavigationStateMachine.equivalent(
+                "https://example.com/path?q=%2e#%2e",
+                "https://example.com/path?q=.#.",
+            )
+        )
+    }
+
+    @Test
+    fun `expanded IPv6 app URL matches Chromium canonical callback host`() {
+        listOf(
+                "https://[000:01:02:003:004:5:6:007]/" to "https://[0:1:2:3:4:5:6:7]/",
+                "https://[1:0:0:2::3:0]/" to "https://[1::2:0:0:3:0]/",
+                "https://[0:0:0:0:0:ffff:192.0.2.128]/" to "https://[::ffff:c000:280]/",
+            )
+            .forEach { (submitted, callback) ->
+                val state = NavigationStateMachine()
+                state.beginAppIssuedNavigation(submitted)
+
+                assertEquals(
+                    NavigationDecision.Allow,
+                    state.evaluate(request(callback, gesture = false, redirect = false)),
+                )
+                assertTrue(state.onPageEvent(callback))
+            }
+    }
+
+    @Test
+    fun `same origin comparison canonicalizes host and default port only`() {
+        assertTrue(
+            NavigationStateMachine.sameOrigin(
+                "https://[000:01:02:003:004:5:6:007]/a",
+                "https://[0:1:2:3:4:5:6:7]:443/other",
+            )
+        )
+        assertFalse(
+            NavigationStateMachine.sameOrigin(
+                "https://example.com/path",
+                "https://example.com:8443/path",
+            )
+        )
+        assertFalse(
+            NavigationStateMachine.sameOrigin(
+                "https://user@example.com/path",
+                "https://example.com/path",
+            )
+        )
+    }
+
+    @Test
+    fun `same-origin History API update advances the committed document URL`() {
+        val state = NavigationStateMachine("https://example.com/old")
+
+        assertTrue(
+            state.onHistoryEvent(
+                "https://example.com/new?q=1#fragment",
+                "https://example.com/new?q=1#fragment",
+            )
+        )
+        assertEquals(
+            "https://example.com/new?q=1#fragment",
+            state.snapshot().currentDocumentUrl,
+        )
+    }
+
+    @Test
+    fun `history event cannot overwrite pending state`() {
+        val state = NavigationStateMachine("https://origin.example/old")
+        state.evaluate(request("https://pending.example/", gesture = false))
+
+        assertFalse(
+            state.onHistoryEvent(
+                "https://origin.example/late",
+                "https://origin.example/late",
+            )
+        )
+        assertEquals("https://pending.example/", state.snapshot().pendingNavigationUrl)
+    }
+
+    @Test
+    fun `committed cross-origin POST callback synchronizes current document`() {
+        val state = NavigationStateMachine("https://origin.example/form")
+
+        assertTrue(
+            state.onHistoryEvent(
+                "https://destination.example/result",
+                "https://destination.example/result",
+            )
+        )
+        assertEquals("https://destination.example/result", state.snapshot().currentDocumentUrl)
+    }
+
+    @Test
+    fun `committed fallback rejects mismatched forbidden and active URLs`() {
+        val idle = NavigationStateMachine("https://origin.example/")
+        assertFalse(
+            idle.onHistoryEvent(
+                "https://destination.example/result",
+                "https://other.example/result",
+            )
+        )
+        assertFalse(
+            idle.onHistoryEvent("http://destination.example/", "http://destination.example/")
+        )
+        assertFalse(idle.onHistoryEvent("data:text/html,hello", "data:text/html,hello"))
+
+        val active = NavigationStateMachine("https://origin.example/")
+        active.beginAppIssuedNavigation("https://expected.example/")
+        assertFalse(
+            active.onHistoryEvent(
+                "https://unexpected.example/",
+                "https://unexpected.example/",
+            )
         )
     }
 
@@ -97,6 +304,13 @@ class NavigationStateMachineTest {
         assertTrue(NavigationStateMachine.isAllowedMainFrameScheme("about:blank#fragment"))
         assertFalse(NavigationStateMachine.isAllowedMainFrameScheme("about:blankevil"))
         assertFalse(NavigationStateMachine.isAllowedMainFrameScheme("data:text/html,hello"))
+        assertFalse(NavigationStateMachine.isAllowedMainFrameScheme("https:opaque"))
+        assertFalse(
+            NavigationStateMachine.isAllowedMainFrameScheme(
+                "https://user:password@example.com/path"
+            )
+        )
+        assertFalse(NavigationStateMachine.isAllowedMainFrameScheme("blob:http://example.com/id"))
     }
 
     private fun request(

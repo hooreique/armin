@@ -1,7 +1,7 @@
 package dev.armin.browser
 
+import android.annotation.SuppressLint
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Message
@@ -9,12 +9,12 @@ import android.view.View
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
-import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -51,6 +51,12 @@ class BrowserController(
         }
     private val serviceWorkerBridge = ServiceWorkerContentBlockingBridge(contentInterceptor)
     private var addressEditedByUser = false
+    private val directLinkBridge =
+        DirectLinkNavigationBridge(webView) { url ->
+            addressEditedByUser = false
+            navigationState.beginAppIssuedNavigation(url)
+            webView.loadUrl(url)
+        }
 
     val currentDocumentUrl: String
         get() = navigationState.snapshot().currentDocumentUrl
@@ -60,6 +66,7 @@ class BrowserController(
 
     init {
         configureWebView()
+        directLinkBridge.installIfSupported()
         documentScriptInjector.installBeforeFirstLoad(webView)
         serviceWorkerBridge.installIfSupported()
         showBlankStartPage()
@@ -67,6 +74,10 @@ class BrowserController(
 
     fun onAddressEditedByUser() {
         addressEditedByUser = true
+    }
+
+    fun onAddressEditingFinished() {
+        addressEditedByUser = false
     }
 
     fun submitAddress(input: String): Boolean =
@@ -84,29 +95,28 @@ class BrowserController(
             }
         }
 
-    fun canGoBack(): Boolean = webView.canGoBack()
+    fun canGoBack(): Boolean = webView.allowedBackEntry() != null
 
     fun goBack() {
-        if (!webView.canGoBack()) return
-        val history = webView.copyBackForwardList()
-        val targetIndex = history.currentIndex - 1
-        if (targetIndex >= 0) {
-            history.getItemAtIndex(targetIndex)?.url?.let(navigationState::beginAppIssuedNavigation)
-        }
-        webView.goBack()
+        val entry = webView.allowedBackEntry() ?: return
+        navigationState.beginAppIssuedNavigation(entry.url)
+        webView.goBackOrForward(entry.offset)
     }
 
     override fun close() {
         webView.stopLoading()
+        directLinkBridge.close()
         serviceWorkerBridge.close()
         documentScriptInjector.close()
         webView.setDownloadListener(null)
     }
 
-    @Suppress("SetJavaScriptEnabled")
+    @Suppress("SetJavaScriptEnabled", "DEPRECATION")
     private fun configureWebView() {
         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
-        webView.setBackgroundColor(Color.BLACK)
+        webView.setBackgroundColor(
+            androidx.core.content.ContextCompat.getColor(webView.context, dev.armin.R.color.black)
+        )
         with(webView.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -132,7 +142,9 @@ class BrowserController(
 
         webView.webViewClient = BrowserWebViewClient()
         webView.webChromeClient = BrowserChromeClient()
-        webView.setDownloadListener { _, _, _, _, _ -> /* Downloads are intentionally unsupported. */ }
+        webView.setDownloadListener { _, _, _, _, _ ->
+            /* Downloads are intentionally unsupported. */
+        }
     }
 
     private fun showBlankStartPage() {
@@ -153,18 +165,21 @@ class BrowserController(
         ui.replaceAddress(UrlNormalizer.displayText(url), requestFocus = true)
     }
 
-    private fun publishCurrentAddressIfUnchanged(url: String) {
-        if (navigationState.onPageEvent(url) && !addressEditedByUser) {
-            val value =
-                if (url.startsWith("https://", ignoreCase = true)) {
-                    UrlNormalizer.displayText(url)
-                } else {
-                    ""
-                }
-            ui.replaceAddress(value, requestFocus = false)
-        }
+    private fun publishAddressIfAccepted(url: String, accepted: Boolean) {
+        if (!accepted || addressEditedByUser) return
+        val value =
+            if (url.startsWith("https://", ignoreCase = true)) {
+                UrlNormalizer.displayText(url)
+            } else {
+                ""
+            }
+        ui.replaceAddress(value, requestFocus = false)
     }
 
+    // WebView requires one callback owner for navigation, TLS, rendering, and request policy.
+    @Suppress("TooManyFunctions")
+    // AndroidX lint misses the override in this private inner class; it is implemented below.
+    @SuppressLint("MissingOnRenderProcessGone")
     private inner class BrowserWebViewClient : WebViewClient() {
         override fun shouldOverrideUrlLoading(
             view: WebView,
@@ -175,7 +190,10 @@ class BrowserController(
                 if (
                     WebViewFeature.isFeatureSupported(
                         WebViewFeature.WEB_RESOURCE_REQUEST_IS_REDIRECT
-                    )
+                    ) &&
+                        WebViewFeature.isFeatureSupported(
+                            WebViewFeature.SHOULD_OVERRIDE_WITH_REDIRECTS
+                        )
                 ) {
                     runCatching { WebResourceRequestCompat.isRedirect(request) }.getOrNull()
                 } else {
@@ -186,6 +204,9 @@ class BrowserController(
                     url = request.url.toString(),
                     hasGesture = request.hasGesture(),
                     isRedirect = redirect,
+                    // Ordinary links are reissued by the isolated document-start bridge. Neither
+                    // hasGesture nor WebView's shared hit-test cache is an authorization signal.
+                    isDirectLink = false,
                 )
             )
         }
@@ -206,16 +227,16 @@ class BrowserController(
         }
 
         override fun onPageCommitVisible(view: WebView, url: String) {
-            publishCurrentAddressIfUnchanged(url)
+            publishAddressIfAccepted(url, navigationState.onPageEvent(url))
         }
 
         override fun onPageFinished(view: WebView, url: String) {
             documentScriptInjector.injectFallbackAfterPageFinished(view, url)
-            publishCurrentAddressIfUnchanged(url)
+            publishAddressIfAccepted(url, navigationState.onPageEvent(url))
         }
 
         override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
-            publishCurrentAddressIfUnchanged(url)
+            publishAddressIfAccepted(url, navigationState.onHistoryEvent(url, view.url))
         }
 
         override fun onReceivedSslError(
@@ -230,6 +251,11 @@ class BrowserController(
             view: WebView,
             detail: RenderProcessGoneDetail,
         ): Boolean {
+            // Do not call stopLoading or any other method on the crashed WebView. Only detach the
+            // process-wide hooks before the Activity destroys this instance.
+            directLinkBridge.discardAfterRendererGone()
+            serviceWorkerBridge.close()
+            documentScriptInjector.discardAfterRendererGone()
             ui.onRendererTerminated()
             return true
         }
@@ -284,4 +310,17 @@ class BrowserController(
             "<!doctype html><html><head><meta name=\"color-scheme\" content=\"dark\">" +
                 "<style>html,body{margin:0;background:#000}</style></head><body></body></html>"
     }
+}
+
+private data class BackEntry(val offset: Int, val url: String)
+
+private fun WebView.allowedBackEntry(): BackEntry? {
+    val history = copyBackForwardList()
+    for (index in history.currentIndex - 1 downTo 0) {
+        val url = history.getItemAtIndex(index)?.url ?: continue
+        if (NavigationStateMachine.isAllowedMainFrameScheme(url)) {
+            return BackEntry(index - history.currentIndex, url)
+        }
+    }
+    return null
 }
