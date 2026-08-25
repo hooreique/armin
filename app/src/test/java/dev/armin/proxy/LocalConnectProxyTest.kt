@@ -18,7 +18,8 @@ import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLContext
@@ -36,7 +37,7 @@ import org.junit.Test
 class LocalConnectProxyTest {
     @Test
     fun bindsOnlyIpv4LoopbackOnAnEphemeralPortAndClosesCleanly() {
-        val proxy = LocalConnectProxy(testConfig())
+        val proxy = newProxy()
         val address = proxy.start()
 
         assertEquals("127.0.0.1", address.address.hostAddress)
@@ -73,7 +74,7 @@ class LocalConnectProxyTest {
                     }
                 }
 
-            LocalConnectProxy(testConfig()).use { proxy ->
+            newProxy().use { proxy ->
                 val proxyAddress = proxy.start()
                 Socket().use { client ->
                     client.soTimeout = 3_000
@@ -107,7 +108,7 @@ class LocalConnectProxyTest {
     fun remoteConnectionFailureReturnsBadGateway() {
         val unavailablePort = ServerSocket(0, 1, LOOPBACK).use { it.localPort }
 
-        LocalConnectProxy(testConfig()).use { proxy ->
+        newProxy().use { proxy ->
             Socket().use { client ->
                 client.soTimeout = 2_000
                 client.connect(proxy.start())
@@ -120,7 +121,7 @@ class LocalConnectProxyTest {
 
     @Test(timeout = 5_000)
     fun partialConnectHeaderTimesOutWithAnExplicitResponse() {
-        LocalConnectProxy(
+        newProxy(
                 testConfig()
                     .copy(
                         headerReadTimeoutMillis = 100,
@@ -158,7 +159,7 @@ class LocalConnectProxyTest {
                         tunnelPollTimeoutMillis = 50,
                     )
 
-            LocalConnectProxy(config).use { proxy ->
+            newProxy(config).use { proxy ->
                 Socket().use { client ->
                     client.soTimeout = 3_000
                     client.connect(proxy.start())
@@ -189,7 +190,7 @@ class LocalConnectProxyTest {
                     }
                 }
 
-            LocalConnectProxy(testConfig()).use { proxy ->
+            newProxy().use { proxy ->
                 Socket().use { client ->
                     client.soTimeout = 3_000
                     client.connect(proxy.start())
@@ -208,6 +209,37 @@ class LocalConnectProxyTest {
     }
 
     @Test(timeout = 6_000)
+    fun serverEarlyCloseClosesTheClientAndReleasesResources() {
+        ServerSocket(0, 2, LOOPBACK).use { upstream ->
+            val upstreamExecutor = Executors.newSingleThreadExecutor()
+            val serverClosed =
+                upstreamExecutor.submit<Boolean> {
+                    upstream.accept().use { server ->
+                        server.soTimeout = 3_000
+                        server.getInputStream().readExactly(6)
+                    }
+                    true
+                }
+
+            newProxy().use { proxy ->
+                Socket().use { client ->
+                    client.soTimeout = 3_000
+                    client.connect(proxy.start())
+                    establishTunnel(client, upstream.localPort)
+                    client.getOutputStream().write(byteArrayOf(23, 3, 3, 0, 1, 11))
+                    client.getOutputStream().flush()
+
+                    assertTrue(serverClosed.get(3, TimeUnit.SECONDS))
+                    assertPeerClosed(client)
+                }
+                eventually { proxy.activeSocketCount == 0 }
+            }
+
+            upstreamExecutor.shutdownNow()
+        }
+    }
+
+    @Test(timeout = 6_000)
     fun boundedConnectionExecutorRejectsWorkBeyondItsQueue() {
         val config =
             testConfig()
@@ -216,7 +248,7 @@ class LocalConnectProxyTest {
                     maxPendingConnections = 1,
                     headerReadTimeoutMillis = 4_000,
                 )
-        LocalConnectProxy(config).use { proxy ->
+        newProxy(config).use { proxy ->
             val address = proxy.start()
             val first = Socket()
             val queued = Socket()
@@ -238,150 +270,96 @@ class LocalConnectProxyTest {
     }
 
     @Test(timeout = 6_000)
-    fun dnsResolutionTimeoutReleasesConnectionWorkerAndBoundsUninterruptibleResolver() {
-        val resolverStarted = CountDownLatch(1)
-        val releaseResolver = CountDownLatch(1)
-        val resolverFinished = CountDownLatch(1)
-        val resolverInterrupted = AtomicBoolean(false)
-        val resolverWasDaemon = AtomicBoolean(false)
-        val resolver = HostResolver {
-            resolverStarted.countDown()
-            resolverWasDaemon.set(Thread.currentThread().isDaemon)
-            try {
-                while (releaseResolver.count > 0) {
-                    try {
-                        releaseResolver.await()
-                    } catch (_: InterruptedException) {
-                        resolverInterrupted.set(true)
-                    }
-                }
-                arrayOf(LOOPBACK)
-            } finally {
-                resolverFinished.countDown()
-            }
-        }
+    fun dnsResolutionTimeoutCancelsPlatformQueryAndReleasesWorker() {
+        val queryStarted = CountDownLatch(1)
+        val queryCancelled = CountDownLatch(1)
+        val cancellationCount = AtomicInteger()
+        val callback = AtomicReference<DnsQueryCallback>()
+        val worker = AtomicReference<Thread>()
+        val resolver =
+            AndroidDnsHostResolver(
+                queryLauncher =
+                    DnsQueryLauncher { _, result ->
+                        callback.set(result)
+                        worker.set(Thread.currentThread())
+                        queryStarted.countDown()
+                        DnsQueryCancellation {
+                            cancellationCount.incrementAndGet()
+                            queryCancelled.countDown()
+                        }
+                    },
+                numericAddressParser = NumericAddressParser { null },
+            )
         val config =
             testConfig()
                 .copy(
-                    dnsResolverThreads = 1,
-                    maxPendingDnsResolutions = 1,
                     connectTimeoutMillis = 120,
-                    shutdownTimeoutMillis = 120,
+                    shutdownTimeoutMillis = 1_000,
                 )
         val proxy = LocalConnectProxy(config, resolver)
         val client = Socket()
-        var closeElapsedMillis = Long.MAX_VALUE
         try {
             client.soTimeout = 2_000
             client.connect(proxy.start())
-            writeConnect(client, 443, "uninterruptible.test")
-            assertTrue(resolverStarted.await(1, TimeUnit.SECONDS))
+            writeConnect(client, 443, "timeout.test")
+            assertTrue(queryStarted.await(1, TimeUnit.SECONDS))
 
             assertTrue(readHttpHeader(client).startsWith("HTTP/1.1 504 "))
+            assertTrue(queryCancelled.await(1, TimeUnit.SECONDS))
             eventually { proxy.activeSocketCount == 0 }
-            eventually { resolverInterrupted.get() }
-            assertTrue(resolverWasDaemon.get())
-            assertEquals(1, proxy.activeDnsResolutionCount)
-
-            val closeStarted = System.nanoTime()
+            callback.get().onAnswer(arrayOf(LOOPBACK))
             proxy.close()
-            closeElapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - closeStarted)
-            assertFalse(resolverFinished.await(50, TimeUnit.MILLISECONDS))
+            eventually { !worker.get().isAlive }
+            assertEquals(1, cancellationCount.get())
         } finally {
-            releaseResolver.countDown()
             client.close()
             proxy.close()
         }
-
-        assertTrue(resolverFinished.await(1, TimeUnit.SECONDS))
-        assertTrue("close waited $closeElapsedMillis ms", closeElapsedMillis < 1_000)
     }
 
     @Test(timeout = 6_000)
-    fun closeInterruptsDnsExecutorAndConnectionWaiter() {
-        val resolverStarted = CountDownLatch(1)
-        val resolverInterrupted = CountDownLatch(1)
-        val resolverFinished = CountDownLatch(1)
-        val neverRelease = CountDownLatch(1)
-        val resolver = HostResolver {
-            resolverStarted.countDown()
+    fun repeatedProxyCloseCancelsPendingDnsWithoutSurvivingWorkers() {
+        val workers = mutableListOf<Thread>()
+        val cancellationCount = AtomicInteger()
+        val callbacks = mutableListOf<DnsQueryCallback>()
+        val resolver =
+            AndroidDnsHostResolver(
+                queryLauncher =
+                    DnsQueryLauncher { _, callback ->
+                        synchronized(callbacks) { callbacks += callback }
+                        synchronized(workers) { workers += Thread.currentThread() }
+                        DnsQueryCancellation { cancellationCount.incrementAndGet() }
+                    },
+                numericAddressParser = NumericAddressParser { null },
+            )
+        repeat(3) { index ->
+            val proxy =
+                LocalConnectProxy(
+                    testConfig()
+                        .copy(
+                            connectTimeoutMillis = 5_000,
+                            shutdownTimeoutMillis = 1_000,
+                        ),
+                    resolver,
+                )
+            val client = Socket()
             try {
-                neverRelease.await()
-                arrayOf(LOOPBACK)
-            } catch (_: InterruptedException) {
-                resolverInterrupted.countDown()
-                emptyArray()
+                client.connect(proxy.start())
+                writeConnect(client, 443, "close-$index.test")
+                eventually { synchronized(callbacks) { callbacks.size == index + 1 } }
+
+                proxy.close()
+
+                eventually { synchronized(workers) { workers.none(Thread::isAlive) } }
+                assertEquals(0, proxy.activeSocketCount)
             } finally {
-                resolverFinished.countDown()
+                client.close()
+                proxy.close()
             }
         }
-        val proxy =
-            LocalConnectProxy(
-                testConfig()
-                    .copy(
-                        dnsResolverThreads = 1,
-                        maxPendingDnsResolutions = 1,
-                        connectTimeoutMillis = 5_000,
-                        shutdownTimeoutMillis = 1_000,
-                    ),
-                resolver,
-            )
-        val client = Socket()
-        try {
-            client.connect(proxy.start())
-            writeConnect(client, 443, "close-cleanup.test")
-            assertTrue(resolverStarted.await(1, TimeUnit.SECONDS))
-
-            proxy.close()
-
-            assertTrue(resolverInterrupted.await(1, TimeUnit.SECONDS))
-            assertTrue(resolverFinished.await(1, TimeUnit.SECONDS))
-            assertEquals(0, proxy.activeSocketCount)
-        } finally {
-            client.close()
-            proxy.close()
-        }
-    }
-
-    @Test(timeout = 8_000)
-    fun fullDnsQueueRejectsAdditionalResolutionWithServiceUnavailable() {
-        val resolverStarted = CountDownLatch(1)
-        val releaseResolver = CountDownLatch(1)
-        val resolver = HostResolver {
-            resolverStarted.countDown()
-            releaseResolver.await()
-            arrayOf(LOOPBACK)
-        }
-        val unavailablePort = ServerSocket(0, 1, LOOPBACK).use { it.localPort }
-        val config =
-            testConfig()
-                .copy(
-                    dnsResolverThreads = 1,
-                    maxPendingDnsResolutions = 1,
-                    connectTimeoutMillis = 3_000,
-                )
-        val proxy = LocalConnectProxy(config, resolver)
-        val clients = List(3) { Socket().apply { soTimeout = 3_000 } }
-        try {
-            val proxyAddress = proxy.start()
-            clients.forEach { it.connect(proxyAddress) }
-            writeConnect(clients[0], unavailablePort, "active-resolution.test")
-            assertTrue(resolverStarted.await(1, TimeUnit.SECONDS))
-            writeConnect(clients[1], unavailablePort, "queued-resolution.test")
-            eventually { proxy.pendingDnsResolutionCount == 1 }
-            assertEquals(1, proxy.activeDnsResolutionCount)
-
-            writeConnect(clients[2], unavailablePort, "rejected-resolution.test")
-            assertTrue(readHttpHeader(clients[2]).startsWith("HTTP/1.1 503 "))
-
-            releaseResolver.countDown()
-            assertTrue(readHttpHeader(clients[0]).startsWith("HTTP/1.1 502 "))
-            assertTrue(readHttpHeader(clients[1]).startsWith("HTTP/1.1 502 "))
-        } finally {
-            releaseResolver.countDown()
-            clients.forEach(Socket::close)
-            proxy.close()
-        }
+        synchronized(callbacks) { callbacks.forEach { it.onAnswer(arrayOf(LOOPBACK)) } }
+        assertEquals(3, cancellationCount.get())
+        assertEquals(3, synchronized(workers) { workers.size })
     }
 
     private fun serveTlsRequest(tlsServer: SSLServerSocket): String =
@@ -395,7 +373,7 @@ class LocalConnectProxyTest {
         }
 
     private fun exerciseTlsThroughProxy(tlsServer: SSLServerSocket) {
-        val proxy = LocalConnectProxy(testConfig())
+        val proxy = newProxy()
         val raw = Socket()
         var client: SSLSocket? = null
         try {
@@ -419,6 +397,15 @@ class LocalConnectProxyTest {
         }
     }
 
+    private fun newProxy(config: ProxyConfig = testConfig()): LocalConnectProxy =
+        LocalConnectProxy(
+            config,
+            HostResolver { host ->
+                check(host == LOOPBACK.hostAddress) { "Unexpected test host: $host" }
+                ImmediateHostResolution(arrayOf(LOOPBACK))
+            },
+        )
+
     private fun testConfig(): ProxyConfig =
         ProxyConfig(
             maxConnections = 4,
@@ -431,6 +418,13 @@ class LocalConnectProxyTest {
             interSegmentDelayMillis = 0,
             shutdownTimeoutMillis = 2_000,
         )
+
+    private class ImmediateHostResolution(private val addresses: Array<InetAddress>) :
+        HostResolution {
+        override fun await(timeoutNanos: Long): Array<InetAddress> = addresses.copyOf()
+
+        override fun cancel() = Unit
+    }
 
     private fun establishTunnel(client: Socket, remotePort: Int) {
         writeConnect(client, remotePort)

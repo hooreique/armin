@@ -6,12 +6,12 @@ listed verification has passed; items marked `[~]` are in progress.
 
 ## Resume here
 
-- Current phase: tracked-source Nix build and release-artifact verification
-- Next action: commit the generated Gradle dependency manifest, run `nix build .#default` and
-  `nix flake check`, then inspect the resulting APK
-- Last checkpoint commit: `6afb42a feat: implement secure WebView browser and local proxy`
-- Integrated browser, proxy, Android, and Nix sources pass the complete Gradle quality gate. The
-  remaining work is the tracked-source Nix build and release-artifact verification.
+- Current phase: tracked DNS lifecycle checkpoint, dependency recapture, and final Nix/APK rerun
+- Next action: commit the quality-gated API 29 cancellable DNS implementation, rerun dependency
+  capture, then rebuild and inspect the final Nix APK
+- Last checkpoint commit: `f7f94c9 build: capture reproducible Gradle dependencies`
+- The audit's DNS leak is corrected and the 71-test Gradle quality gate passes with zero Lint issues.
+  Nix and APK checks remain stale until the new source files are committed and rebuilt.
 
 ## 1. Project and reproducible toolchain
 
@@ -22,9 +22,9 @@ listed verification has passed; items marked `[~]` are in progress.
 - [x] Put `java`, `gradle`, `adb`, `ktfmt`, and JetBrains `kotlin-lsp` in the shell.
 - [x] Add offline Gradle dependency capture plus `nix run .#update-deps`.
 - [x] Make `nix fmt` format Nix and Kotlin/Gradle Kotlin files.
-- [ ] Make `nix flake check` run all required quality gates.
-- [ ] Make `nix build .#default` produce `result/apk/armin.apk`.
-- [ ] Verify that the APK is installable and debug-signed.
+- [~] Make `nix flake check` run all required quality gates (current-source rerun pending).
+- [~] Make `nix build .#default` produce `result/apk/armin.apk` (current-source rerun pending).
+- [~] Verify that the APK is structurally installable and debug-signed (current APK is stale).
 
 ## 2. Browser UI and navigation
 
@@ -52,6 +52,7 @@ listed verification has passed; items marked `[~]` are in progress.
 - [x] Split SNI hostname bytes into non-empty writes that reconstruct the original exactly.
 - [x] Apply `TCP_NODELAY`, connect/read/idle timeouts, and a documented parse-failure policy.
 - [x] Implement bidirectional copying, half-close handling, cancellation, and socket cleanup.
+- [x] Ensure DNS work cannot survive or accumulate across Activity/proxy-session shutdown.
 - [x] Add parser/splitter/proxy lifecycle and local-server integration tests.
 - [x] Wire proxy readiness and AndroidX WebKit proxy override before the first navigation.
 - [x] Clear the override and stop all proxy resources during final Activity destruction.
@@ -60,19 +61,19 @@ listed verification has passed; items marked `[~]` are in progress.
 ## 4. Integration, documentation, and release artifact
 
 - [x] Integrate source work streams and resolve API/lifecycle races.
-- [~] Confirm only `INTERNET` permission and no exported control surface/unsafe JS bridge (final
-  manifest/APK audit pending).
+- [~] Confirm only `INTERNET` is directly requested and no exported control surface/unsafe JS
+  bridge exists (current-source APK rerun pending).
 - [~] Confirm no site-data clearing, SSL bypass, remote code, analytics, or production key exists
-  (final APK audit pending).
+  (current-source APK rerun pending).
 - [x] Write README: scope, SDKs, commands, LSP setup, debug signing/install, limitations, licenses.
 - [x] Run `./gradlew spotlessApply` and commit formatting-only changes if needed.
 - [x] Run `./gradlew quality` successfully.
 - [x] Run focused proxy/browser unit tests successfully.
 - [x] Run `nix fmt` successfully.
-- [ ] Run `nix flake check` successfully.
-- [ ] Run `nix build .#default` successfully from tracked sources.
-- [ ] Inspect `result/apk/armin.apk` name, manifest, signature, and contents.
-- [ ] Update this file with final verification evidence and handoff notes.
+- [~] Run `nix flake check` successfully for the current source.
+- [~] Run `nix build .#default` successfully from the current tracked sources.
+- [~] Inspect the current `result/apk/armin.apk` name, manifest, signature, and contents.
+- [~] Update this file with final verification evidence and handoff notes.
 
 ## Verification log
 
@@ -107,10 +108,36 @@ Add commands, date, commit, and result here. Do not mark a gate complete without
 - 2026-08-25: `nix run .#update-deps` completed the exact 69-task graph in 2m47s, including the
   quality gate, debug APK assembly, and instrumentation-test Kotlin compilation. The resulting
   72,285-byte lockfile records 390 Maven paths across the pinned repositories.
+- 2026-08-25 (`f7f94c9`, pre-audit artifact): `nix build .#default` succeeded from the committed
+  source and dependency
+  lock, producing `result/apk/armin.apk` (7,507,814 bytes, SHA-256
+  `2e0de280a9883f3b96b7ebf2f7f32f976023fc78dcb4b9444c5d2dc867219d69`). `nix flake check`
+  then evaluated every output and passed the package-backed quality check.
+- 2026-08-25: the dev shell exposed all required tools/environment variables; `kotlin-lsp --version`
+  returned `LS-262.9593.0`, inherited Neovim launched headlessly, and a fresh dev-shell
+  `quality :app:compileDebugAndroidTestKotlin` invocation passed.
+- 2026-08-25: build-tools 37 `apksigner` verified one v2 signer (`CN=Android Debug`, RSA-2048), and
+  `zipalign -c -P 16 -v 4` passed. The APK manifest reports package `dev.armin`, min/target/compile
+  SDK 28/37/37, debug mode, no backup, no cleartext, and only direct `INTERNET` permission. AndroidX
+  contributes its self-signature dynamic-receiver permission and a `DUMP`-protected profile
+  receiver; neither exposes proxy or navigation control.
+- 2026-08-25: that pre-audit 86-entry APK contains no test tree, key/certificate/keystore, or native
+  library. `adb devices -l` found no device/emulator, so structural installability is verified but
+  a live install and the fourteen compiled instrumentation fixtures were not executed.
+- 2026-08-25: the independent final audit found that the previous per-session JVM DNS executor
+  could retain an interrupt-ignoring resolver after proxy close. The implementation now requires
+  Android 10/API 29 and uses `DnsResolver` with a query-specific `CancellationSignal`; numeric IPv4
+  and IPv6 bypass DNS, and no application-owned DNS thread/executor exists.
+- 2026-08-25: the corrected dev-shell quality gate passed 71 JVM tests with zero failures, errors,
+  or skips; Detekt, Spotless, Android Lint (zero issues), and fourteen-fixture instrumentation Kotlin
+  compilation also passed. New regressions cover idempotent cancellation, ignored late callbacks,
+  timeout/close cleanup across three proxy sessions, and server-initiated early close.
 
 ## Decisions and known constraints
 
 - Package/application ID: `dev.armin`.
+- Minimum Android version: API 29, selected because it is the first public cancellable system DNS
+  API and lets Activity shutdown terminate every application-owned proxy worker.
 - ClientHello parse/accumulation failure policy: forward every captured byte unchanged, then use a
   raw tunnel; EOF after a truncated input closes after forwarding the captured prefix.
 - Redirect enforcement is limited to main-frame navigation callbacks exposed by WebView, as the

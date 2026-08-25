@@ -4,8 +4,6 @@ package dev.armin.proxy
 data class ProxyConfig(
     val maxConnections: Int = 16,
     val maxPendingConnections: Int = 16,
-    val dnsResolverThreads: Int = 2,
-    val maxPendingDnsResolutions: Int = 16,
     val maxConnectHeaderBytes: Int = 16 * 1024,
     val maxClientHelloBytes: Int = 64 * 1024,
     val maxClientHelloRecords: Int = 32,
@@ -22,10 +20,6 @@ data class ProxyConfig(
     init {
         require(maxConnections > 0) { "maxConnections must be positive" }
         require(maxPendingConnections > 0) { "maxPendingConnections must be positive" }
-        require(dnsResolverThreads > 0) { "dnsResolverThreads must be positive" }
-        require(maxPendingDnsResolutions > 0) {
-            "maxPendingDnsResolutions must be positive"
-        }
         require(maxConnectHeaderBytes >= 4) { "maxConnectHeaderBytes must be at least 4" }
         require(maxClientHelloBytes >= 5) { "maxClientHelloBytes must be at least 5" }
         require(maxClientHelloRecords > 0) { "maxClientHelloRecords must be positive" }

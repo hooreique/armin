@@ -23,7 +23,7 @@ QUIC 프록시, TLS MITM, Picture-in-Picture 및 production 배포는 지원하�
 
 ## SDK와 도구
 
-- `minSdk`: 28
+- `minSdk`: 29 (Android 10; cancellable platform DNS가 필요함)
 - `compileSdk`: 37
 - `targetSdk`: 37
 - UI: Kotlin + Android Views + AndroidX Activity/WebKit
@@ -116,8 +116,10 @@ WebView나 프록시 시작 실패를 직접 연결로 조용히 우회하지 �
 
 WebView proxy override는 process-global이므로 겹쳐 존재하는 Activity들이 하나의 ref-counted
 session을 공유합니다. 마지막 lease가 끝난 뒤에만 override와 listener를 정리해 이전 Activity가
-새 Activity의 설정을 지우는 race를 막습니다. DNS 조회는 별도의 bounded executor와 connect
-deadline 안에서 실행하므로 resolver가 멈추더라도 CONNECT worker 전체가 무한히 잠기지 않습니다.
+새 Activity의 설정을 지우는 race를 막습니다. DNS 조회는 Android 10부터 제공되는 비동기
+`DnsResolver`와 query별 `CancellationSignal`을 사용합니다. 숫자 IPv4/IPv6는 DNS 없이 파싱하고,
+나머지 조회는 CONNECT deadline이나 session 종료 때 취소합니다. 앱 소유 DNS thread/executor를
+만들지 않으며 동시에 대기 가능한 query 수도 bounded CONNECT worker 수를 넘지 않습니다.
 
 소스 manifest가 직접 요청하는 플랫폼 권한은 `INTERNET`뿐입니다. 최종 merged manifest에는
 AndroidX가 동적 receiver 보호용 self-signature permission과 `DUMP` 권한으로 보호된 profile

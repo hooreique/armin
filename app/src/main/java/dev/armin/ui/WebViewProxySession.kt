@@ -6,6 +6,7 @@ import android.os.Looper
 import androidx.webkit.ProxyConfig as WebViewProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
+import dev.armin.proxy.AndroidDnsHostResolver
 import dev.armin.proxy.LocalConnectProxy
 import java.net.InetSocketAddress
 import java.util.concurrent.Executor
@@ -109,7 +110,7 @@ internal object WebViewProxySession {
         val executor = Executors.newSingleThreadExecutor()
         startupExecutor = executor
         executor.execute {
-            val candidate = LocalConnectProxy()
+            val candidate = LocalConnectProxy(hostResolver = AndroidDnsHostResolver())
             try {
                 val address = candidate.start()
                 mainHandler.post { onProxyStarted(generation, candidate, address) }

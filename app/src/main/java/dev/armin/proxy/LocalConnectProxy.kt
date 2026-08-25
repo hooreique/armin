@@ -22,14 +22,20 @@ import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
-fun interface HostResolver {
-    fun resolve(host: String): Array<InetAddress>
+internal fun interface HostResolver {
+    fun start(host: String): HostResolution
+}
+
+internal interface HostResolution {
+    fun await(timeoutNanos: Long): Array<InetAddress>
+
+    fun cancel()
 }
 
 /** Loopback-only, ephemeral-port HTTP CONNECT proxy with bounded resources. */
-class LocalConnectProxy(
+internal class LocalConnectProxy(
     private val config: ProxyConfig = ProxyConfig(),
-    private val hostResolver: HostResolver = SYSTEM_HOST_RESOLVER,
+    private val hostResolver: HostResolver,
 ) : Closeable {
     private val lifecycleLock = Any()
     private val running = AtomicBoolean(false)
@@ -42,7 +48,6 @@ class LocalConnectProxy(
     @Volatile private var acceptThread: Thread? = null
     @Volatile private var connectionExecutor: ThreadPoolExecutor? = null
     @Volatile private var relayExecutor: ThreadPoolExecutor? = null
-    @Volatile private var dnsExecutor: ThreadPoolExecutor? = null
 
     val isRunning: Boolean
         get() = state == State.RUNNING && running.get()
@@ -69,7 +74,6 @@ class LocalConnectProxy(
             val listener = ServerSocket()
             var createdConnections: ThreadPoolExecutor? = null
             var createdRelays: ThreadPoolExecutor? = null
-            var createdDns: ThreadPoolExecutor? = null
             try {
                 listener.reuseAddress = true
                 listener.bind(
@@ -91,18 +95,10 @@ class LocalConnectProxy(
                         "relay",
                     )
                 createdRelays = relays
-                val dns =
-                    boundedExecutor(
-                        config.dnsResolverThreads,
-                        config.maxPendingDnsResolutions,
-                        "dns",
-                    )
-                createdDns = dns
                 val address = listener.localSocketAddress as InetSocketAddress
                 serverSocket = listener
                 connectionExecutor = connections
                 relayExecutor = relays
-                dnsExecutor = dns
                 boundAddress = InetSocketAddress(LOOPBACK_ADDRESS, address.port)
                 running.set(true)
                 state = State.RUNNING
@@ -110,10 +106,10 @@ class LocalConnectProxy(
                 launchAcceptLoop(listener, connections)
                 checkNotNull(boundAddress)
             } catch (failure: IOException) {
-                markStartFailed(listener, createdConnections, createdRelays, createdDns)
+                markStartFailed(listener, createdConnections, createdRelays)
                 throw failure
             } catch (failure: SecurityException) {
-                markStartFailed(listener, createdConnections, createdRelays, createdDns)
+                markStartFailed(listener, createdConnections, createdRelays)
                 throw failure
             }
         }
@@ -133,11 +129,10 @@ class LocalConnectProxy(
         listener: ServerSocket,
         connections: ExecutorService?,
         relays: ExecutorService?,
-        dns: ExecutorService?,
     ) {
         running.set(false)
         state = State.CLOSED
-        cleanupFailedStart(listener, connections, relays, dns)
+        cleanupFailedStart(listener, connections, relays)
     }
 
     override fun close() {
@@ -151,7 +146,6 @@ class LocalConnectProxy(
                     acceptThread.also { acceptThread = null },
                     connectionExecutor.also { connectionExecutor = null },
                     relayExecutor.also { relayExecutor = null },
-                    dnsExecutor.also { dnsExecutor = null },
                 )
             }
 
@@ -159,13 +153,11 @@ class LocalConnectProxy(
         activeSockets.forEach(::closeQuietly)
         resources.connections?.shutdownNow()
         resources.relays?.shutdownNow()
-        resources.dns?.shutdownNow()
 
         val deadline =
             System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(config.shutdownTimeoutMillis)
         awaitUntil(resources.connections, deadline)
         awaitUntil(resources.relays, deadline)
-        awaitUntil(resources.dns, deadline)
         val thread = resources.acceptThread
         if (thread != null && thread !== Thread.currentThread()) {
             val remainingNanos = deadline - System.nanoTime()
@@ -182,12 +174,6 @@ class LocalConnectProxy(
 
     internal val activeSocketCount: Int
         get() = activeSockets.size
-
-    internal val activeDnsResolutionCount: Int
-        get() = dnsExecutor?.activeCount ?: 0
-
-    internal val pendingDnsResolutionCount: Int
-        get() = dnsExecutor?.queue?.size ?: 0
 
     private fun acceptLoop(listener: ServerSocket, executor: ThreadPoolExecutor) {
         try {
@@ -232,10 +218,9 @@ class LocalConnectProxy(
             val clientInput = BufferedInputStream(client.getInputStream(), config.tunnelBufferBytes)
             val clientOutput = client.getOutputStream()
             val request = readConnectRequest(client, clientInput, config) ?: return
-            val resolvers = dnsExecutor ?: return
             remote =
-                RemoteConnector(config, activeSockets, running, resolvers, hostResolver)
-                    .open(request, client) ?: return
+                RemoteConnector(config, activeSockets, running, hostResolver).open(request, client)
+                    ?: return
 
             clientOutput.write(CONNECTION_ESTABLISHED_RESPONSE)
             clientOutput.flush()
@@ -305,7 +290,6 @@ class LocalConnectProxy(
         val acceptThread: Thread?,
         val connections: ExecutorService?,
         val relays: ExecutorService?,
-        val dns: ExecutorService?,
     )
 
     private enum class State {
@@ -324,12 +308,10 @@ private fun cleanupFailedStart(
     listener: ServerSocket,
     connections: ExecutorService?,
     relays: ExecutorService?,
-    dns: ExecutorService?,
 ) {
     closeQuietly(listener)
     connections?.shutdownNow()
     relays?.shutdownNow()
-    dns?.shutdownNow()
 }
 
 private fun readConnectRequest(
@@ -359,7 +341,6 @@ private class RemoteConnector(
     private val config: ProxyConfig,
     private val activeSockets: MutableSet<Socket>,
     private val running: AtomicBoolean,
-    private val dnsExecutor: ThreadPoolExecutor,
     private val hostResolver: HostResolver,
 ) {
     fun open(request: ConnectRequest, client: Socket): Socket? {
@@ -375,9 +356,13 @@ private class RemoteConnector(
     ): Array<InetAddress>? {
         val resolution =
             try {
-                dnsExecutor.submit<Array<InetAddress>> { hostResolver.resolve(host) }
-            } catch (_: RejectedExecutionException) {
-                sendResponse(client, SERVICE_UNAVAILABLE_RESPONSE)
+                hostResolver.start(host)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                if (running.get()) sendResponse(client, SERVICE_UNAVAILABLE_RESPONSE)
+                return null
+            } catch (_: RuntimeException) {
+                sendResponse(client, BAD_GATEWAY_RESPONSE)
                 return null
             }
 
@@ -388,7 +373,7 @@ private class RemoteConnector(
             return null
         }
         return try {
-            resolution.get(remainingNanos, TimeUnit.NANOSECONDS).takeIf { it.isNotEmpty() }
+            resolution.await(remainingNanos).takeIf { it.isNotEmpty() }
                 ?: run {
                     sendResponse(client, BAD_GATEWAY_RESPONSE)
                     null
@@ -411,10 +396,7 @@ private class RemoteConnector(
         }
     }
 
-    private fun cancelResolution(resolution: java.util.concurrent.Future<Array<InetAddress>>) {
-        resolution.cancel(true)
-        dnsExecutor.purge()
-    }
+    private fun cancelResolution(resolution: HostResolution) = resolution.cancel()
 
     private fun connectResolvedAddress(
         addresses: Array<InetAddress>,
@@ -561,4 +543,3 @@ private val HEADER_TOO_LARGE_RESPONSE = response(431, "Request Header Fields Too
 private val BAD_GATEWAY_RESPONSE = response(502, "Bad Gateway")
 private val GATEWAY_TIMEOUT_RESPONSE = response(504, "Gateway Timeout")
 private val SERVICE_UNAVAILABLE_RESPONSE = response(503, "Service Unavailable")
-private val SYSTEM_HOST_RESOLVER = HostResolver(InetAddress::getAllByName)
