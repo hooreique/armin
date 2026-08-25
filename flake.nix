@@ -73,18 +73,28 @@
                 name = baseNameOf path;
               in
               !(
-                type == "directory"
-                && (
-                  builtins.elem name [
-                    ".direnv"
-                    ".git"
-                    ".gradle"
-                    ".idea"
-                    ".vscode"
-                    "build"
-                    "result"
+                (
+                  type == "directory"
+                  && (
+                    builtins.elem name [
+                      ".direnv"
+                      ".git"
+                      ".gradle"
+                      ".idea"
+                      ".vscode"
+                      "build"
+                      "result"
+                    ]
+                    || pkgs.lib.hasPrefix "result-" name
+                  )
+                )
+                || (
+                  type == "regular"
+                  && builtins.elem name [
+                    "README.md"
+                    "TODO.md"
+                    "requirements.md"
                   ]
-                  || pkgs.lib.hasPrefix "result-" name
                 )
               );
           };
