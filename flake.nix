@@ -1,14 +1,8 @@
 {
   description = "Armin Android spoofdpi-ish browser";
 
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    android-nixpkgs = {
-      url = "github:tadfisher/android-nixpkgs/stable";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.android-nixpkgs.url = "github:tadfisher/android-nixpkgs/stable";
 
   outputs =
     {
