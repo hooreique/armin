@@ -1,5 +1,5 @@
 {
-  description = "Armin Android spoofdpi-ish browser";
+  description = "spoofdpi-ish browser for Android";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   inputs.android-nixpkgs.url = "github:tadfisher/android-nixpkgs/stable";
@@ -109,7 +109,7 @@
             '';
 
             meta = {
-              description = "Android spoofdpi-ish browser";
+              description = "spoofdpi-ish browser for Android";
               homepage = "https://github.com/hooreique/armin";
               license = with pkgs.lib.licenses; [
                 asl20
