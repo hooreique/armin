@@ -78,6 +78,7 @@
                 || (
                   type == "directory"
                   && builtins.elem name [
+                    ".github"
                     ".direnv"
                     ".git"
                     ".gradle"
@@ -91,6 +92,7 @@
                   && builtins.elem name [
                     "CONTRIBUTING.md"
                     "README.md"
+                    "TODO.md"
                   ]
                 )
               );

@@ -51,7 +51,7 @@ QUIC 프록시, TLS MITM, Picture-in-Picture, 광고 차단 목록 및 productio
 
 ## 빌드와 설치
 
-Nix가 JDK 17, Gradle, Android SDK, adb, ktfmt 및 Kotlin LSP를 고정합니다.
+Nix가 JDK 17, Gradle, Android SDK, adb와 ktfmt를 고정합니다.
 
 ```bash
 nix build .#default
@@ -112,7 +112,7 @@ SNI 바이트는 암호화하거나 제거하지 않고 write 경계만 나눕�
 
 ## 개발
 
-개발 셸, 코드 품질 검사, 계측 테스트, Kotlin LSP 및 의존성 갱신 방법은
+개발 셸, 코드 품질 검사, 계측 테스트 및 의존성 갱신 방법은
 [`CONTRIBUTING.md`](CONTRIBUTING.md)를 참고하세요.
 
 ## 라이선스와 제3자 고지

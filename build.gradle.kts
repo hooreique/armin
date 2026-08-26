@@ -34,3 +34,14 @@ tasks.register("quality") {
         ":app:verifyDebugRuntimeLicenseInventory",
     )
 }
+
+tasks.register("ci") {
+    group = "verification"
+    description = "Runs the checks used by pull request CI."
+    dependsOn(
+        "spotlessCheck",
+        ":app:detekt",
+        ":app:lintDebug",
+        ":app:testDebugUnitTest",
+    )
+}
