@@ -27,7 +27,7 @@ nix develop
 - 문서: `git diff --check`
 - Kotlin: `./gradlew ci`
 - WebView/UI: `./gradlew ci`와 연결된 기기의 `./gradlew :app:connectedDebugAndroidTest`
-- Nix·빌드 설정: `nix flake check 'path:.'`
+- Nix·빌드 설정: `nix flake check`
 
 Kotlin/KTS 포맷은 `./gradlew spotlessApply`, Nix 포맷은 `nix fmt -- flake.nix nix`로
 맞춥니다. 계측 테스트가 관련 동작을 건너뛰면 직접 확인하고 PR에 밝힙니다.
@@ -37,8 +37,8 @@ Kotlin/KTS 포맷은 `./gradlew spotlessApply`, Nix 포맷은 `nix fmt -- flake.
 Gradle/Maven 의존성을 바꾸면 `nix/gradle-deps.json`을 갱신하고 diff를 확인합니다.
 
 ```bash
-nix run 'path:.#update-deps'
-nix flake check 'path:.'
+nix run .#update-deps
+nix flake check
 ```
 
 APK 의존성이 바뀌면 `legal/runtime-dependencies.txt`와 `THIRD_PARTY_NOTICES.md`를 맞추고,

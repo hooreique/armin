@@ -16,7 +16,7 @@ Armin은 Android WebView를 [xvzc/spoofdpi](https://github.com/xvzc/spoofdpi) �
 저장소 루트에서 다음 명령을 실행합니다.
 
 ```bash
-nix build 'path:.#default'
+nix build .#default
 ```
 
 빌드된 debug APK는 `result/apk/armin.apk`에 생성됩니다.

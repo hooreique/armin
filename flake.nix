@@ -59,42 +59,10 @@
               mainProgram = "ktfmt";
             };
           };
-          cleanSource = pkgs.lib.cleanSourceWith {
-            src = ./.;
-            filter =
-              path: type:
-              let
-                name = baseNameOf path;
-              in
-              !(
-                builtins.elem name [ "result" ]
-                || pkgs.lib.hasPrefix "result-" name
-                || (
-                  type == "directory"
-                  && builtins.elem name [
-                    ".github"
-                    ".direnv"
-                    ".git"
-                    ".gradle"
-                    ".idea"
-                    ".vscode"
-                    "build"
-                  ]
-                )
-                || (
-                  type == "regular"
-                  && builtins.elem name [
-                    "CONTRIBUTING.md"
-                    "README.md"
-                    "TODO.md"
-                  ]
-                )
-              );
-          };
           armin = pkgs.stdenvNoCC.mkDerivation (finalAttrs: {
             pname = "armin";
             version = "0.1.0";
-            src = cleanSource;
+            src = ./.;
 
             nativeBuildInputs = [
               androidSdk
