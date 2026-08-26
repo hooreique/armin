@@ -7,6 +7,8 @@ Armin은 작은 노력으로 큰 효과를 내는 변경을 선호합니다. 지
 ## 설계 경계
 
 - 외부 top-level 이동은 HTTPS로 제한하고, 관찰 가능한 자동 이동은 다시 승인받습니다.
+  WebView가 사전에 노출하지 않는 top-level POST 제출은 자동·사용자 제출을 구분하지 않고
+  재승인 예외로 둡니다.
 - WebView는 loopback 프록시가 준비된 뒤에만 통신합니다. 직접 연결 fallback이나 TLS
   복호화를 만들지 않습니다.
 - 앱이 직접 요청하는 플랫폼 권한은 `INTERNET`만 유지하고, analytics나 원격 코드를 앱

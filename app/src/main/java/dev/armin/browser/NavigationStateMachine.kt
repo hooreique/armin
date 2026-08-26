@@ -98,9 +98,11 @@ class NavigationStateMachine(initialDocumentUrl: String = ABOUT_BLANK) {
     /**
      * Accepts the URL that WebView reports as its currently committed history entry.
      *
-     * A user-submitted POST may commit without going through shouldOverrideUrlLoading(). History
-     * API calls cannot create a cross-origin entry, so an allowed callback that exactly matches
-     * WebView's current URL is also the fail-closed way to synchronize such an actual commit.
+     * A main-frame POST, whether submitted by the user or by script, may commit without going
+     * through shouldOverrideUrlLoading(). History API calls cannot create a cross-origin entry, so
+     * an allowed callback that exactly matches WebView's current URL is also the fail-closed way to
+     * synchronize such an actual commit. Pre-commit approval is intentionally not guaranteed for
+     * this WebView limitation.
      */
     @Synchronized
     fun onHistoryEvent(url: String, observedWebViewUrl: String?): Boolean {
