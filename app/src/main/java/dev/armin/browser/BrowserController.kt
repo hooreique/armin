@@ -51,6 +51,7 @@ class BrowserController(
         }
     private val serviceWorkerBridge = ServiceWorkerContentBlockingBridge(contentInterceptor)
     private var addressEditedByUser = false
+    private var trustedDirectLinkBridgeInstalled = false
     private val directLinkBridge =
         DirectLinkNavigationBridge(webView) { url ->
             addressEditedByUser = false
@@ -66,7 +67,7 @@ class BrowserController(
 
     init {
         configureWebView()
-        directLinkBridge.installIfSupported()
+        trustedDirectLinkBridgeInstalled = directLinkBridge.installIfSupported()
         documentScriptInjector.installBeforeFirstLoad(webView)
         serviceWorkerBridge.installIfSupported()
         showBlankStartPage()
@@ -204,9 +205,10 @@ class BrowserController(
                     url = request.url.toString(),
                     hasGesture = request.hasGesture(),
                     isRedirect = redirect,
-                    // Ordinary links are reissued by the isolated document-start bridge. Neither
-                    // hasGesture nor WebView's shared hit-test cache is an authorization signal.
-                    isDirectLink = false,
+                    // Prefer the isolated document-start bridge when available. Older WebViews
+                    // cannot expose that trusted channel, so hasGesture is the best signal they
+                    // provide for the requirement's ordinary-link fallback.
+                    isDirectLink = !trustedDirectLinkBridgeInstalled && request.hasGesture(),
                 )
             )
         }

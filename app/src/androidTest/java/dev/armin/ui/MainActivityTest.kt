@@ -1,6 +1,7 @@
 package dev.armin.ui
 
-import android.graphics.drawable.ColorDrawable
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -16,6 +17,10 @@ import androidx.test.espresso.action.ViewActions.replaceText
 import androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.webkit.WebViewFeature
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -35,10 +40,19 @@ class MainActivityTest {
                 assertEquals(1, webViews.size)
                 assertEquals(1, addressBars.size)
                 assertEquals("", addressBars.single().text.toString())
+                val webView = webViews.single()
+                val rendered =
+                    Bitmap.createBitmap(
+                        webView.width.coerceAtLeast(1),
+                        webView.height.coerceAtLeast(1),
+                        Bitmap.Config.ARGB_8888,
+                    )
+                webView.draw(Canvas(rendered))
                 assertEquals(
                     ContextCompat.getColor(activity, dev.armin.R.color.black),
-                    (webViews.single().background as ColorDrawable).color,
+                    rendered.getPixel(rendered.width / 2, rendered.height / 2),
                 )
+                rendered.recycle()
                 assertTrue(webViews.single().url == null || webViews.single().url == "about:blank")
             }
         }
@@ -77,35 +91,44 @@ class MainActivityTest {
     }
 
     @Test
-    fun trustedOrdinaryAnchorIsReissuedInTheCurrentWebView() {
-        assumeDirectLinkBridgeSupported()
+    fun trustedOrdinaryAnchorOpensInTheCurrentWebView() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             assumeTrue(
                 "Proxy override is unavailable in this WebView",
                 waitUntilAddressReady(scenario),
             )
-            scenario.loadHtmlFixture("<a id='link' href='#destination'>destination</a>")
+            scenario.loadHtmlFixture(
+                "<a id='link' href='/armin-direct-destination'>destination</a>"
+            )
             assumeTrue("Fixture did not load", waitUntilWebViewUrl(scenario, FIXTURE_URL))
             SystemClock.sleep(SCRIPT_INSTALL_SETTLE_MILLIS)
+            assertEquals(
+                "\"link\"",
+                scenario.evaluateJavascript("document.elementFromPoint($TAP_X, $TAP_Y)?.id"),
+            )
 
             scenario.tapFixtureLink()
 
-            assertTrue(
-                "Trusted anchor was not opened by the isolated-world bridge",
-                waitUntilWebViewUrl(scenario, "$FIXTURE_URL#destination"),
-            )
+            val expected = "$FIXTURE_ORIGIN/armin-direct-destination"
+            if (!waitUntilWebViewUrl(scenario, expected)) {
+                assertEquals(
+                    "$expected|example.com/armin-direct-destination",
+                    "${scenario.webViewUrl()}|${scenario.addressText()}",
+                )
+            }
         }
     }
 
     @Test
     fun syntheticAnchorClickCannotUseGestureNavigationAllowance() {
-        assumeDirectLinkBridgeSupported()
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             assumeTrue(
                 "Proxy override is unavailable in this WebView",
                 waitUntilAddressReady(scenario),
             )
-            scenario.loadHtmlFixture("<a id='link' href='#synthetic'>destination</a>")
+            scenario.loadHtmlFixture(
+                "<a id='link' href='/armin-synthetic-destination'>destination</a>"
+            )
             assumeTrue("Fixture did not load", waitUntilWebViewUrl(scenario, FIXTURE_URL))
             SystemClock.sleep(SCRIPT_INSTALL_SETTLE_MILLIS)
 
@@ -117,7 +140,7 @@ class MainActivityTest {
 
             assertTrue(
                 "Synthetic click did not become a pending navigation",
-                waitUntilAddressText(scenario, "fixture.test/page#synthetic"),
+                waitUntilAddressText(scenario, "example.com/armin-synthetic-destination"),
             )
             assertEquals(FIXTURE_URL, scenario.webViewUrl())
         }
@@ -132,7 +155,8 @@ class MainActivityTest {
                 waitUntilAddressReady(scenario),
             )
             scenario.loadHtmlFixture(
-                "<a id='link' href='#declared' onpointerdown=\"this.href='#mutated'\">" +
+                "<a id='link' href='/armin-declared' " +
+                    "onpointerdown=\"this.href='/armin-mutated'\">" +
                     "destination</a>"
             )
             assumeTrue("Fixture did not load", waitUntilWebViewUrl(scenario, FIXTURE_URL))
@@ -141,7 +165,7 @@ class MainActivityTest {
             scenario.tapFixtureLink()
             SystemClock.sleep(SCRIPT_INSTALL_SETTLE_MILLIS)
 
-            assertTrue(waitUntilWebViewUrl(scenario, "$FIXTURE_URL#declared"))
+            assertTrue(waitUntilWebViewUrl(scenario, "$FIXTURE_ORIGIN/armin-declared"))
         }
     }
 
@@ -154,7 +178,8 @@ class MainActivityTest {
                 waitUntilAddressReady(scenario),
             )
             scenario.loadHtmlFixture(
-                "<a id='link' href='#cancelled' onclick='event.preventDefault()'>destination</a>"
+                "<a id='link' href='/armin-cancelled' " +
+                    "onclick='event.preventDefault()'>destination</a>"
             )
             assumeTrue("Fixture did not load", waitUntilWebViewUrl(scenario, FIXTURE_URL))
             SystemClock.sleep(SCRIPT_INSTALL_SETTLE_MILLIS)
@@ -162,7 +187,7 @@ class MainActivityTest {
             scenario.tapFixtureLink()
             SystemClock.sleep(SCRIPT_INSTALL_SETTLE_MILLIS)
 
-            assertTrue(waitUntilWebViewUrl(scenario, "$FIXTURE_URL#cancelled"))
+            assertTrue(waitUntilWebViewUrl(scenario, "$FIXTURE_ORIGIN/armin-cancelled"))
         }
     }
 
@@ -175,7 +200,8 @@ class MainActivityTest {
                 waitUntilAddressReady(scenario),
             )
             scenario.loadHtmlFixture(
-                "<base target='_blank'><a id='link' target='' href='#popup'>destination</a>"
+                "<base target='_blank'><a id='link' target='' " +
+                    "href='/armin-popup'>destination</a>"
             )
             assumeTrue("Fixture did not load", waitUntilWebViewUrl(scenario, FIXTURE_URL))
             SystemClock.sleep(SCRIPT_INSTALL_SETTLE_MILLIS)
@@ -197,7 +223,8 @@ class MainActivityTest {
             )
             scenario.loadHtmlFixture(
                 "<svg><base target='_self'></base></svg>" +
-                    "<base target='_blank'><a id='link' target='' href='#popup'>destination</a>"
+                    "<base target='_blank'><a id='link' target='' " +
+                    "href='/armin-popup'>destination</a>"
             )
             assumeTrue("Fixture did not load", waitUntilWebViewUrl(scenario, FIXTURE_URL))
             SystemClock.sleep(SCRIPT_INSTALL_SETTLE_MILLIS)
@@ -219,7 +246,7 @@ class MainActivityTest {
             )
             scenario.loadHtmlFixture(
                 "<svg width='200' height='120'>" +
-                    "<a id='link' href='#svg'><rect width='200' height='120'/></a></svg>"
+                    "<a id='link' href='/armin-svg'><rect width='200' height='120'/></a></svg>"
             )
             assumeTrue("Fixture did not load", waitUntilWebViewUrl(scenario, FIXTURE_URL))
             SystemClock.sleep(SCRIPT_INSTALL_SETTLE_MILLIS)
@@ -240,8 +267,8 @@ class MainActivityTest {
                 waitUntilAddressReady(scenario),
             )
             scenario.loadHtmlFixture(
-                "<a href='#outer'><svg width='200' height='120'>" +
-                    "<a id='link' href='#inner'><rect width='200' height='120'/></a>" +
+                "<a href='/armin-outer'><svg width='200' height='120'>" +
+                    "<a id='link' href='/armin-inner'><rect width='200' height='120'/></a>" +
                     "</svg></a>"
             )
             assumeTrue("Fixture did not load", waitUntilWebViewUrl(scenario, FIXTURE_URL))
@@ -263,7 +290,7 @@ class MainActivityTest {
                 waitUntilAddressReady(scenario),
             )
             scenario.loadHtmlFixture(
-                "<form action='#inner'><a href='#outer'>" +
+                "<form action='/armin-inner'><a href='/armin-outer'>" +
                     "<button id='link' style='width:200px;height:120px'>submit</button>" +
                     "</a></form>"
             )
@@ -286,7 +313,7 @@ class MainActivityTest {
                 waitUntilAddressReady(scenario),
             )
             scenario.loadHtmlFixture(
-                "<a href='#outer'><select id='link' style='width:200px;height:120px'>" +
+                "<a href='/armin-outer'><select id='link' style='width:200px;height:120px'>" +
                     "<option>choice</option></select></a>"
             )
             assumeTrue("Fixture did not load", waitUntilWebViewUrl(scenario, FIXTURE_URL))
@@ -308,7 +335,7 @@ class MainActivityTest {
                 waitUntilAddressReady(scenario),
             )
             scenario.loadHtmlFixture(
-                "<a href='#mapped'><img id='link' ismap width='200' height='120' " +
+                "<a href='/armin-mapped'><img id='link' ismap width='200' height='120' " +
                     "src='data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='></a>"
             )
             assumeTrue("Fixture did not load", waitUntilWebViewUrl(scenario, FIXTURE_URL))
@@ -364,17 +391,45 @@ class MainActivityTest {
     }
 
     private fun ActivityScenario<MainActivity>.loadHtmlFixture(body: String) {
+        onView(isAssignableFrom(EditText::class.java))
+            .perform(replaceText(FIXTURE_URL), pressImeActionButton())
+        if (!waitUntilWebViewUrl(this, FIXTURE_URL) || !waitUntilDocumentReady(this)) return
+
+        val markup =
+            "<style>html,body{margin:0}a{display:block;width:200px;height:120px}</style>$body"
+        val injected = AtomicBoolean(false)
         onActivity { activity ->
-            activity
-                .webView()
-                .loadDataWithBaseURL(
-                    FIXTURE_URL,
-                    "<!doctype html><style>html,body{margin:0}a{display:block;width:200px;height:120px}</style>$body",
-                    "text/html",
-                    "UTF-8",
-                    null,
-                )
+            activity.webView().evaluateJavascript(
+                "document.body.innerHTML = ${JSONObject.quote(markup)}; true"
+            ) { result ->
+                injected.set(result == "true")
+            }
         }
+        assertTrue("Fixture HTML injection failed", waitUntil { injected.get() })
+    }
+
+    private fun waitUntilDocumentReady(scenario: ActivityScenario<MainActivity>): Boolean {
+        repeat(STARTUP_POLL_ATTEMPTS) {
+            val ready = AtomicBoolean(false)
+            val callback = CountDownLatch(1)
+            scenario.onActivity { activity ->
+                activity.webView().evaluateJavascript(
+                    "location.href === ${JSONObject.quote(FIXTURE_URL)} && " +
+                        "document.readyState === 'complete'"
+                ) { result ->
+                    ready.set(result == "true")
+                    callback.countDown()
+                }
+            }
+            if (
+                callback.await(JAVASCRIPT_CALLBACK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) &&
+                    ready.get()
+            ) {
+                return true
+            }
+            SystemClock.sleep(STARTUP_POLL_MILLIS)
+        }
+        return false
     }
 
     private fun ActivityScenario<MainActivity>.tapFixtureLink() {
@@ -383,10 +438,16 @@ class MainActivityTest {
             webView.requestFocus()
             val downTime = SystemClock.uptimeMillis()
             val down = touchEvent(downTime, downTime, MotionEvent.ACTION_DOWN)
-            val up = touchEvent(downTime, downTime + TAP_DURATION_MILLIS, MotionEvent.ACTION_UP)
             webView.dispatchTouchEvent(down)
-            webView.dispatchTouchEvent(up)
             down.recycle()
+            SystemClock.sleep(TAP_DURATION_MILLIS)
+            val up =
+                touchEvent(
+                    downTime,
+                    SystemClock.uptimeMillis(),
+                    MotionEvent.ACTION_UP,
+                )
+            webView.dispatchTouchEvent(up)
             up.recycle()
         }
     }
@@ -403,6 +464,31 @@ class MainActivityTest {
             result = content.descendantsOfType(WebView::class.java).single().url
         }
         return result
+    }
+
+    private fun ActivityScenario<MainActivity>.addressText(): String {
+        var result = ""
+        onActivity { activity ->
+            val content = activity.findViewById<ViewGroup>(android.R.id.content)
+            result = content.descendantsOfType(EditText::class.java).single().text.toString()
+        }
+        return result
+    }
+
+    private fun ActivityScenario<MainActivity>.evaluateJavascript(script: String): String {
+        val callback = CountDownLatch(1)
+        var result: String? = null
+        onActivity { activity ->
+            activity.webView().evaluateJavascript(script) { value ->
+                result = value
+                callback.countDown()
+            }
+        }
+        assertTrue(
+            "JavaScript result callback timed out",
+            callback.await(JAVASCRIPT_RESULT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+        )
+        return checkNotNull(result)
     }
 
     private fun <T : View> View.descendantsOfType(type: Class<T>): List<T> {
@@ -431,9 +517,12 @@ class MainActivityTest {
         }
 
     companion object {
-        private const val FIXTURE_URL = "https://fixture.test/page"
+        private const val FIXTURE_ORIGIN = "https://example.com"
+        private const val FIXTURE_URL = "$FIXTURE_ORIGIN/"
         private const val STARTUP_POLL_ATTEMPTS = 100
         private const val STARTUP_POLL_MILLIS = 50L
+        private const val JAVASCRIPT_CALLBACK_TIMEOUT_MILLIS = 250L
+        private const val JAVASCRIPT_RESULT_TIMEOUT_SECONDS = 5L
         private const val SCRIPT_INSTALL_SETTLE_MILLIS = 250L
         private const val TAP_DURATION_MILLIS = 50L
         private const val TAP_X = 50f
