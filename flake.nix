@@ -73,27 +73,24 @@
                 name = baseNameOf path;
               in
               !(
-                (
+                builtins.elem name [ "result" ]
+                || pkgs.lib.hasPrefix "result-" name
+                || (
                   type == "directory"
-                  && (
-                    builtins.elem name [
-                      ".direnv"
-                      ".git"
-                      ".gradle"
-                      ".idea"
-                      ".vscode"
-                      "build"
-                      "result"
-                    ]
-                    || pkgs.lib.hasPrefix "result-" name
-                  )
+                  && builtins.elem name [
+                    ".direnv"
+                    ".git"
+                    ".gradle"
+                    ".idea"
+                    ".vscode"
+                    "build"
+                  ]
                 )
                 || (
                   type == "regular"
                   && builtins.elem name [
+                    "CONTRIBUTING.md"
                     "README.md"
-                    "TODO.md"
-                    "requirements.md"
                   ]
                 )
               );
@@ -138,11 +135,22 @@
             installPhase = ''
               runHook preInstall
               install -Dm755 app/build/outputs/apk/debug/app-debug.apk "$out/apk/armin.apk"
+              install -Dm644 LICENSE "$out/share/licenses/armin/Armin-MIT.txt"
+              install -m644 LICENSES/*.txt "$out/share/licenses/armin/"
+              install -Dm644 NOTICE "$out/share/doc/armin/NOTICE"
+              install -Dm644 THIRD_PARTY_NOTICES.md "$out/share/doc/armin/THIRD_PARTY_NOTICES.md"
+              install -Dm644 legal/runtime-dependencies.txt "$out/share/doc/armin/runtime-dependencies.txt"
               runHook postInstall
             '';
 
             meta = {
               description = "Android SpoofDPI WebView browser";
+              license = with pkgs.lib.licenses; [
+                asl20
+                boost
+                bsd3
+                mit
+              ];
               platforms = supportedSystems;
             };
           });

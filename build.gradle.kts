@@ -24,6 +24,13 @@ tasks.named("spotlessApply") {
 
 tasks.register("quality") {
     group = "verification"
-    description = "Runs formatting, static analysis, Android lint, and unit tests."
-    dependsOn("spotlessCheck", ":app:detekt", ":app:lintDebug", ":app:test")
+    description = "Runs formatting, analysis, tests, and distribution license checks."
+    dependsOn(
+        "spotlessCheck",
+        ":app:detekt",
+        ":app:lintDebug",
+        ":app:test",
+        ":app:verifyDebugLegalAssets",
+        ":app:verifyDebugRuntimeLicenseInventory",
+    )
 }
