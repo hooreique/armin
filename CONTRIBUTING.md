@@ -22,6 +22,10 @@ Nix 개발 환경은 `x86_64-linux`를 지원합니다.
 nix develop
 ```
 
+debug APK는 재현 가능한 서명을 위해 `config/reproducible-debug.keystore`를 사용하고
+`dev.armin.debug`로 설치됩니다. 이 keystore와 비밀번호는 의도적으로 공개되어 있으며
+release 서명에 사용해서는 안 됩니다.
+
 작업 중에는 가장 가까운 테스트를 실행하고, 제출 전에는 변경에 해당하는 것만 확인합니다.
 
 - 문서: `git diff --check`

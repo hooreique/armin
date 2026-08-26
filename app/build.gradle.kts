@@ -184,6 +184,17 @@ android {
     compileSdk = 37
     buildToolsVersion = "37.0.0"
 
+    signingConfigs {
+        create("reproducibleDebug") {
+            // This keystore and its credentials are intentionally public and debug-only.
+            storeFile = rootProject.file("config/reproducible-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+            storeType = "JKS"
+        }
+    }
+
     defaultConfig {
         applicationId = "dev.armin"
         minSdk = 29
@@ -192,6 +203,14 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            signingConfig = signingConfigs.getByName("reproducibleDebug")
+        }
     }
 
     compileOptions {

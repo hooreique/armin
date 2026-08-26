@@ -19,7 +19,10 @@ Armin은 Android WebView를 [xvzc/spoofdpi](https://github.com/xvzc/spoofdpi) �
 nix build .#default
 ```
 
-빌드된 debug APK는 `result/apk/armin.apk`에 생성됩니다.
+빌드된 debug APK는 `result/apk/armin.apk`에 생성됩니다. 이 APK의 application ID는
+`dev.armin.debug`이며, 재현 가능한 빌드를 위해 저장소에 포함된 공개 개발용 키로
+서명됩니다. 누구나 같은 키로 APK를 서명할 수 있으므로 정식 배포용으로 신뢰해서는 안
+됩니다.
 
 ### 2. 기기 페어링 및 연결
 
@@ -49,7 +52,7 @@ adb devices
 
 ```bash
 adb install -r result/apk/armin.apk
-adb shell am start -n dev.armin/.ui.MainActivity
+adb shell am start -n dev.armin.debug/dev.armin.ui.MainActivity
 ```
 
 이후에는 기기의 앱 목록에서 Armin을 직접 실행할 수 있습니다.
