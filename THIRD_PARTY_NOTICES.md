@@ -110,6 +110,6 @@ classes into this APK. Those classes are governed by the R8 project's BSD
 ## Design reference, not bundled code
 
 The SNI write-splitting idea was informed by the Apache-2.0 project
-[`xvzc/SpoofDPI`](https://github.com/xvzc/SpoofDPI). Armin does not copy or
-bundle SpoofDPI source code, so SpoofDPI is a design reference rather than a
+[`xvzc/spoofdpi`](https://github.com/xvzc/spoofdpi). Armin does not copy or
+bundle spoofdpi source code, so spoofdpi is a design reference rather than a
 distributed dependency.
