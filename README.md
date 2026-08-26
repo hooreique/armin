@@ -3,10 +3,6 @@
 Armin은 Android WebView를 [xvzc/spoofdpi](https://github.com/xvzc/spoofdpi) 방식으로
 래핑한 미니멀 브라우저입니다.
 
-관찰 가능한 자동 top-level 이동은 주소창에서 다시 승인받지만, WebView가 탐색 전에
-콜백으로 노출하지 않는 HTTPS POST 제출은 자동 제출과 사용자 제출 모두 바로 이동할 수
-있습니다.
-
 ## Getting Started
 
 ### Prerequisites
