@@ -11,12 +11,10 @@
       android-nixpkgs,
     }:
     let
-      supportedSystems = [ "x86_64-linux" ];
-      forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
+      system = "x86_64-linux";
     in
     {
-      packages = forAllSystems (
-        system:
+      packages.${system} =
         let
           pkgs = import nixpkgs {
             inherit system;
@@ -119,7 +117,7 @@
                 bsd3
                 mit
               ];
-              platforms = supportedSystems;
+              platforms = [ system ];
             };
           });
         in
@@ -131,22 +129,16 @@
             kotlinLsp
             ktfmt
             ;
-        }
-      );
-
-      checks = forAllSystems (system: {
-        default = self.packages.${system}.armin;
-      });
-
-      apps = forAllSystems (system: {
-        update-deps = {
-          type = "app";
-          program = "${self.packages.${system}.armin.mitmCache.updateScript}";
         };
-      });
 
-      devShells = forAllSystems (
-        system:
+      checks.${system}.default = self.packages.${system}.armin;
+
+      apps.${system}.update-deps = {
+        type = "app";
+        program = "${self.packages.${system}.armin.mitmCache.updateScript}";
+      };
+
+      devShells.${system} =
         let
           pkgs = import nixpkgs {
             inherit system;
@@ -177,11 +169,9 @@
               export GRADLE_OPTS="''${GRADLE_OPTS:-} -Dorg.gradle.project.android.aapt2FromMavenOverride=${androidHome}/build-tools/37.0.0/aapt2"
             '';
           };
-        }
-      );
+        };
 
-      formatter = forAllSystems (
-        system:
+      formatter.${system} =
         let
           pkgs = import nixpkgs { inherit system; };
           treefmtConfig = pkgs.writeText "treefmt.toml" ''
@@ -207,7 +197,6 @@
             fi
             exec treefmt --tree-root "$tree_root" --config-file ${treefmtConfig} "$@"
           '';
-        }
-      );
+        };
     };
 }
