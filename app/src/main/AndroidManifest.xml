@@ -20,7 +20,8 @@
             android:name=".ui.MainActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|uiMode"
             android:exported="true"
-            android:theme="@style/Theme.Armin">
+            android:theme="@style/Theme.Armin"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

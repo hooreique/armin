@@ -154,28 +154,23 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
         )
         setContentView(root)
         fullscreenController = FullscreenVideoController(this, root, browserContent)
-        applySystemBarInsets()
+        applySafeAreaInsets()
         bindAddressInput()
     }
 
-    private fun applySystemBarInsets() {
+    private fun applySafeAreaInsets() {
         val baseLeft = browserContent.paddingLeft
         val baseTop = browserContent.paddingTop
         val baseRight = browserContent.paddingRight
-        val baseBottom = addressBar.paddingBottom
+        val baseBottom = browserContent.paddingBottom
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             browserContent.setPadding(
                 baseLeft + bars.left,
                 baseTop + bars.top,
                 baseRight + bars.right,
-                browserContent.paddingBottom,
-            )
-            addressBar.setPadding(
-                addressBar.paddingLeft,
-                addressBar.paddingTop,
-                addressBar.paddingRight,
-                baseBottom + bars.bottom,
+                baseBottom + maxOf(bars.bottom, ime.bottom),
             )
             insets
         }
