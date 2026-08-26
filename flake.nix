@@ -147,6 +147,7 @@
 
             meta = {
               description = "Android SpoofDPI WebView browser";
+              homepage = "https://github.com/hooreique/armin";
               license = with pkgs.lib.licenses; [
                 asl20
                 boost
