@@ -83,8 +83,11 @@
 
             gradleBuildTask = "quality :app:assembleDebug";
             # The pinned nixpkgs eager resolver is not Gradle-9-safe. Exercising the exact build
-            # and verification graph records every dependency that offline builds/tests consume.
-            gradleUpdateTask = "quality :app:assembleDebug :app:compileDebugAndroidTestKotlin";
+            # graph records every dependency that offline builds/tests consume. Legal consistency
+            # is checked by quality only after this cache has been refreshed.
+            gradleUpdateTask =
+              "spotlessCheck :app:detekt :app:lintDebug :app:test :app:assembleDebug "
+              + ":app:compileDebugAndroidTestKotlin";
             gradleFlags = [
               "-Dorg.gradle.java.home=${javaHome}"
               "-Pandroid.aapt2FromMavenOverride=${aapt2}"

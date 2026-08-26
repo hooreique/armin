@@ -40,15 +40,28 @@ Kotlin/KTS 포맷은 `./gradlew spotlessApply`, Nix 포맷은 `nix fmt -- flake.
 
 ## 의존성
 
-Gradle/Maven 의존성을 바꾸면 `nix/gradle-deps.json`을 갱신하고 diff를 확인합니다.
+Gradle/Maven 의존성을 바꾸면 먼저 Nix 캐시를 갱신합니다. 이 단계는 아직 갱신하지 않은
+runtime inventory와 legal asset을 검증하지 않습니다.
 
 ```bash
 nix run .#update-deps
-nix flake check
 ```
 
-APK 의존성이 바뀌면 `legal/runtime-dependencies.txt`와 `THIRD_PARTY_NOTICES.md`를 맞추고,
-필요한 `NOTICE`와 `LICENSES/`를 갱신합니다.
+`nix/gradle-deps.json`의 diff를 확인한 뒤, APK 의존성이 바뀌었다면 다음 검증이 보고하는
+`Missing`과 `Stale` 항목에 맞춰 `legal/runtime-dependencies.txt`를 정렬된 상태로
+갱신합니다.
+
+```bash
+nix develop --command ./gradlew :app:verifyDebugRuntimeLicenseInventory --no-daemon
+```
+
+새 runtime artifact를 `THIRD_PARTY_NOTICES.md`에 기록하고 필요한 `NOTICE`와 `LICENSES/`를
+갱신한 다음 전체 legal 정합성과 Nix 빌드를 순서대로 확인합니다.
+
+```bash
+nix develop --command ./gradlew quality --no-daemon
+nix flake check
+```
 
 ## 라이선스
 
