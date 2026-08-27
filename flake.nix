@@ -12,14 +12,14 @@
     }:
     let
       system = "x86_64-linux";
+      pkgs = import nixpkgs {
+        inherit system;
+        config.allowUnfree = true;
+      };
     in
     {
       packages.${system} =
         let
-          pkgs = import nixpkgs {
-            inherit system;
-            config.allowUnfree = true;
-          };
           androidSdk = android-nixpkgs.sdk.${system} (
             sdkPkgs: with sdkPkgs; [
               build-tools-37-0-0
@@ -140,10 +140,6 @@
 
       devShells.${system} =
         let
-          pkgs = import nixpkgs {
-            inherit system;
-            config.allowUnfree = true;
-          };
           androidSdk = self.packages.${system}.androidSdk;
           androidHome = "${androidSdk}/share/android-sdk";
           java = pkgs.jdk17;
@@ -173,7 +169,6 @@
 
       formatter.${system} =
         let
-          pkgs = import nixpkgs { inherit system; };
           treefmtConfig = pkgs.writeText "treefmt.toml" ''
             [formatter.nixfmt]
             command = "${pkgs.lib.getExe pkgs.nixfmt}"
