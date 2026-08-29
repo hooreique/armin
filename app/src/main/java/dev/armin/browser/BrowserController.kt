@@ -133,7 +133,7 @@ class BrowserController(
         }
 
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
-            WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, true)
+            WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, false)
         }
 
         CookieManager.getInstance().apply {

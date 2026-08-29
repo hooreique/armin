@@ -25,6 +25,8 @@ import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.pressImeActionButton
 import androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import dev.armin.browser.BrowserController
 import dev.armin.browser.ContentBlockingDecision
 import dev.armin.browser.ContentBlockingEngine
@@ -246,6 +248,12 @@ class BrowserAcceptanceTest {
                     )
                 )
                 assertEquals(0, isLightTheme.data)
+                assertFalse(activity.webView().isForceDarkAllowed)
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+                    assertFalse(
+                        WebSettingsCompat.isAlgorithmicDarkeningAllowed(activity.webView().settings)
+                    )
+                }
                 assertEquals(
                     Color.BLACK,
                     (activity.contentRoot().getChildAt(0).background as ColorDrawable).color,
