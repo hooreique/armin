@@ -10,6 +10,7 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
@@ -42,6 +43,122 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class BrowserAcceptanceTest {
+    @Test
+    fun webViewAllowsMediaAutoplayWithoutChangingSitePlaybackState() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.prepareFixture(
+                """
+                <audio id="audio" autoplay loop></audio>
+                <video id="video" autoplay loop muted></video>
+                <script>
+                  const sampleCount = 8000;
+                  const wav = new Uint8Array(44 + sampleCount);
+                  const header = new DataView(wav.buffer);
+                  const text = (offset, value) => {
+                    for (let i = 0; i < value.length; i++) wav[offset + i] = value.charCodeAt(i);
+                  };
+                  text(0, 'RIFF');
+                  header.setUint32(4, 36 + sampleCount, true);
+                  text(8, 'WAVE');
+                  text(12, 'fmt ');
+                  header.setUint32(16, 16, true);
+                  header.setUint16(20, 1, true);
+                  header.setUint16(22, 1, true);
+                  header.setUint32(24, 8000, true);
+                  header.setUint32(28, 8000, true);
+                  header.setUint16(32, 1, true);
+                  header.setUint16(34, 8, true);
+                  text(36, 'data');
+                  header.setUint32(40, sampleCount, true);
+                  wav.fill(128, 44);
+                  const media = new Blob([wav], {type: 'audio/wav'});
+                  const audio = document.getElementById('audio');
+                  const video = document.getElementById('video');
+                  audio.volume = 0.25;
+                  video.volume = 0.5;
+                  audio.src = URL.createObjectURL(media);
+                  window.startFixtureVideo = () => { video.src = URL.createObjectURL(media); };
+                </script>
+                """
+                    .trimIndent()
+            )
+            scenario.onActivity { activity ->
+                assertFalse(activity.webView().settings.mediaPlaybackRequiresUserGesture)
+            }
+            assertTrue(
+                "Audio did not autoplay without a user gesture",
+                waitUntil {
+                    scenario.evaluateJavascript("!document.getElementById('audio').paused") ==
+                        "true"
+                },
+            )
+            scenario.onActivity { activity ->
+                assertFalse(activity.window.hasKeepScreenOnFlag())
+            }
+
+            assertEquals(
+                "true",
+                scenario.evaluateJavascript("window.startFixtureVideo(); true"),
+            )
+            assertTrue(
+                "Video did not autoplay without a user gesture",
+                waitUntil {
+                    scenario.evaluateJavascript("!document.getElementById('video').paused") ==
+                        "true"
+                },
+            )
+            assertEquals(
+                "\"true|0.25|0.5\"",
+                scenario.evaluateJavascript(
+                    "(() => { const a=document.getElementById('audio'); " +
+                        "const v=document.getElementById('video'); " +
+                        "return `${'$'}{v.muted}|${'$'}{a.volume}|${'$'}{v.volume}`; })()"
+                ),
+            )
+            assertTrue(
+                "Playing video did not keep the screen on",
+                waitUntil {
+                    var keepScreenOn = false
+                    scenario.onActivity { activity ->
+                        keepScreenOn = activity.window.hasKeepScreenOnFlag()
+                    }
+                    keepScreenOn
+                },
+            )
+
+            scenario.runJavascript("document.getElementById('video').pause()")
+            assertTrue(
+                "Pausing the last video did not release the screen-on flag",
+                waitUntil {
+                    var keepScreenOn = true
+                    scenario.onActivity { activity ->
+                        keepScreenOn = activity.window.hasKeepScreenOnFlag()
+                    }
+                    !keepScreenOn
+                },
+            )
+        }
+    }
+
+    @Test
+    fun videoPlayEventDoesNotRequestFullscreen() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.prepareFixture("<video id='video'></video>")
+            val previousOrientation = scenario.requestedOrientation()
+
+            assertEquals(
+                "true",
+                scenario.evaluateJavascript(
+                    "document.getElementById('video').dispatchEvent(new Event('play')); true"
+                ),
+            )
+            SystemClock.sleep(SCRIPT_INSTALL_SETTLE_MILLIS)
+
+            assertTrue(scenario.addressIsShown())
+            assertEquals(previousOrientation, scenario.requestedOrientation())
+        }
+    }
+
     @Test
     fun focusedInputDoesNotConsumeTheFirstLinkTap() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -640,6 +757,9 @@ class BrowserAcceptanceTest {
 
     private fun MainActivity.browserContent(): LinearLayout =
         privateField("browserContent") as LinearLayout
+
+    private fun android.view.Window.hasKeepScreenOnFlag(): Boolean =
+        attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
 
     private fun MainActivity.installFixtureHarness(body: String): BrowserController {
         val oldFullscreenController =

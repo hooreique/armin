@@ -28,6 +28,8 @@ interface BrowserUiCallbacks {
 
     fun showInvalidAddress()
 
+    fun onVideoPlaybackStateChanged(isPlaying: Boolean)
+
     fun onRendererTerminated()
 }
 
@@ -42,7 +44,6 @@ class BrowserController(
     private val ui: BrowserUiCallbacks,
     private val fullscreenViewHost: FullscreenViewHost,
     contentBlockingEngine: ContentBlockingEngine = NoOpContentBlockingEngine,
-    private val documentScriptInjector: DocumentScriptInjector = DocumentScriptInjector(),
 ) : AutoCloseable {
     private val navigationState = NavigationStateMachine()
     private val contentInterceptor =
@@ -58,6 +59,7 @@ class BrowserController(
             navigationState.beginAppIssuedNavigation(url)
             webView.loadUrl(url)
         }
+    private val videoPlaybackBridge = VideoPlaybackBridge(webView, ui::onVideoPlaybackStateChanged)
 
     val currentDocumentUrl: String
         get() = navigationState.snapshot().currentDocumentUrl
@@ -68,7 +70,7 @@ class BrowserController(
     init {
         configureWebView()
         trustedDirectLinkBridgeInstalled = directLinkBridge.installIfSupported()
-        documentScriptInjector.installBeforeFirstLoad(webView)
+        videoPlaybackBridge.installBeforeFirstLoad()
         serviceWorkerBridge.installIfSupported()
         showBlankStartPage()
     }
@@ -108,7 +110,7 @@ class BrowserController(
         webView.stopLoading()
         directLinkBridge.close()
         serviceWorkerBridge.close()
-        documentScriptInjector.close()
+        videoPlaybackBridge.close()
         webView.setDownloadListener(null)
     }
 
@@ -129,7 +131,7 @@ class BrowserController(
             allowFileAccessFromFileURLs = false
             allowUniversalAccessFromFileURLs = false
             setGeolocationEnabled(false)
-            mediaPlaybackRequiresUserGesture = true
+            mediaPlaybackRequiresUserGesture = false
         }
 
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
@@ -225,6 +227,7 @@ class BrowserController(
         ): WebResourceResponse? = contentInterceptor.intercept(request)
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+            videoPlaybackBridge.resetForNavigation()
             navigationState.onPageStarted(url)
         }
 
@@ -233,7 +236,7 @@ class BrowserController(
         }
 
         override fun onPageFinished(view: WebView, url: String) {
-            documentScriptInjector.injectFallbackAfterPageFinished(view, url)
+            videoPlaybackBridge.injectFallbackAfterPageFinished(url)
             publishAddressIfAccepted(url, navigationState.onPageEvent(url))
         }
 
@@ -257,7 +260,7 @@ class BrowserController(
             // process-wide hooks before the Activity destroys this instance.
             directLinkBridge.discardAfterRendererGone()
             serviceWorkerBridge.close()
-            documentScriptInjector.discardAfterRendererGone()
+            videoPlaybackBridge.discardAfterRendererGone()
             ui.onRendererTerminated()
             return true
         }
