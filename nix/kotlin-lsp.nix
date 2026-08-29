@@ -10,16 +10,16 @@
 }:
 
 let
-  version = "262.9593.0";
+  version = "262.7569.0";
   source =
     {
       x86_64-linux = {
         suffix = "";
-        hash = "sha256-LZnY4Zj75KqPRIHjd5lyTOlIA7TqEqYLQWBA4/zXzF4=";
+        hash = "sha256-MzyyEhXizgSBcle71caTy71KmRIawQCBRgHtwfktJXA=";
       };
       aarch64-linux = {
         suffix = "-aarch64";
-        hash = "sha256-IxeDHG5WB9BbfrwdplUzASXODj1m+/JFF9/ORC3rwU4=";
+        hash = "sha256-+XRDRZfc1BoOfpw5c7HtmZ/FIVD7BeclgqrN49Hnn38=";
       };
     }
     .${stdenvNoCC.hostPlatform.system};
@@ -29,7 +29,7 @@ stdenvNoCC.mkDerivation {
   inherit version;
 
   src = fetchurl {
-    url = "https://download-cdn.jetbrains.com/language-server/kotlin-server/${version}/kotlin-server-${version}${source.suffix}.tar.gz";
+    url = "https://download-cdn.jetbrains.com/kotlin-lsp/${version}/kotlin-server-${version}${source.suffix}.tar.gz";
     inherit (source) hash;
   };
 
