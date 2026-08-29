@@ -7,9 +7,11 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.WebView
 import android.widget.EditText
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.pressImeActionButton
@@ -29,6 +31,28 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class MainActivityTest {
+    @Test
+    fun videoPlaybackKeepsScreenOnOnlyWhileActivityIsStarted() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                activity.onVideoPlaybackStateChanged(true)
+                assertTrue(activity.window.hasKeepScreenOnFlag())
+            }
+
+            scenario.moveToState(Lifecycle.State.CREATED)
+            scenario.onActivity { activity ->
+                assertTrue(!activity.window.hasKeepScreenOnFlag())
+            }
+
+            scenario.moveToState(Lifecycle.State.STARTED)
+            scenario.onActivity { activity ->
+                assertTrue(activity.window.hasKeepScreenOnFlag())
+                activity.onVideoPlaybackStateChanged(false)
+                assertTrue(!activity.window.hasKeepScreenOnFlag())
+            }
+        }
+    }
+
     @Test
     fun blankStartHasExactlyOneWebViewAndOneEmptyAddressBar() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -501,6 +525,9 @@ class MainActivityTest {
         }
         return matches
     }
+
+    private fun android.view.Window.hasKeepScreenOnFlag(): Boolean =
+        attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
 
     private fun assumeDirectLinkBridgeSupported() {
         assumeTrue(

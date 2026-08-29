@@ -6,6 +6,7 @@ import android.text.InputType
 import android.text.TextWatcher
 import android.view.KeyEvent
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.webkit.WebView
 import android.widget.EditText
@@ -39,6 +40,8 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
     private var browserController: BrowserController? = null
     private var suppressAddressWatcher = false
     private var webViewDestroyed = false
+    private var isActivityStarted = false
+    private var isVideoPlaying = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,6 +76,11 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
         Toast.makeText(this, "HTTPS 주소만 열 수 있습니다.", Toast.LENGTH_SHORT).show()
     }
 
+    override fun onVideoPlaybackStateChanged(isPlaying: Boolean) {
+        isVideoPlaying = isPlaying
+        updateKeepScreenOn()
+    }
+
     override fun onRendererTerminated() {
         // BrowserController deliberately avoids touching a crashed WebView in this path.
         browserController = null
@@ -81,6 +89,18 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
         webViewDestroyed = true
         Toast.makeText(this, "웹 렌더러가 종료되어 브라우저를 닫습니다.", Toast.LENGTH_LONG).show()
         finish()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        isActivityStarted = true
+        updateKeepScreenOn()
+    }
+
+    override fun onStop() {
+        isActivityStarted = false
+        updateKeepScreenOn()
+        super.onStop()
     }
 
     override fun onDestroy() {
@@ -278,6 +298,14 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
     private fun showStartupError(message: String) {
         addressBar.isEnabled = false
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
+    private fun updateKeepScreenOn() {
+        if (isActivityStarted && isVideoPlaying) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
