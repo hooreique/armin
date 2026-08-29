@@ -15,6 +15,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -163,18 +164,28 @@ class MainActivity : ComponentActivity(), BrowserUiCallbacks {
         val baseTop = browserContent.paddingTop
         val baseRight = browserContent.paddingRight
         val baseBottom = browserContent.paddingBottom
-        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+        ViewCompat.setOnApplyWindowInsetsListener(browserContent) { _, insets ->
+            val safeArea =
+                insets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+                )
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             browserContent.setPadding(
-                baseLeft + bars.left,
-                baseTop + bars.top,
-                baseRight + bars.right,
-                baseBottom + maxOf(bars.bottom, ime.bottom),
+                baseLeft + safeArea.left,
+                baseTop + safeArea.top,
+                baseRight + safeArea.right,
+                baseBottom + maxOf(safeArea.bottom, ime.bottom),
             )
-            insets
+            WindowInsetsCompat.Builder(insets)
+                .setInsets(
+                    WindowInsetsCompat.Type.systemBars() or
+                        WindowInsetsCompat.Type.displayCutout() or
+                        WindowInsetsCompat.Type.ime(),
+                    Insets.NONE,
+                )
+                .build()
         }
-        ViewCompat.requestApplyInsets(root)
+        ViewCompat.requestApplyInsets(browserContent)
     }
 
     private fun bindAddressInput() {
