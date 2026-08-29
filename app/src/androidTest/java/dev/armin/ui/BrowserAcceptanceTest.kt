@@ -11,12 +11,15 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
 import android.webkit.WebView
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.pressImeActionButton
@@ -269,6 +272,79 @@ class BrowserAcceptanceTest {
     }
 
     @Test
+    fun nativeSafeAreaIsAppliedOnceAndNotExposedToWebContent() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.prepareFixture(SAFE_AREA_PROBE)
+            scenario.hideIme()
+            assertTrue("IME did not close before the test", scenario.waitForImeVisibility(false))
+
+            scenario.onActivity { activity ->
+                val browserContent = activity.browserContent()
+                val insets = checkNotNull(ViewCompat.getRootWindowInsets(browserContent))
+                val safeArea =
+                    insets.getInsets(
+                        WindowInsetsCompat.Type.systemBars() or
+                            WindowInsetsCompat.Type.displayCutout()
+                    )
+
+                assertTrue(
+                    "The test window did not report a system safe area",
+                    safeArea.top > 0 || safeArea.bottom > 0,
+                )
+                assertEquals(safeArea.left, browserContent.paddingLeft)
+                assertEquals(safeArea.top, browserContent.paddingTop)
+                assertEquals(safeArea.right, browserContent.paddingRight)
+                assertEquals(safeArea.bottom, browserContent.paddingBottom)
+            }
+            assertEquals("\"0px|0px\"", scenario.safeAreaProbe())
+        }
+    }
+
+    @Test
+    fun imeResizesWebContentOnceAndRestoresItAfterClosing() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.prepareFixture(SAFE_AREA_PROBE)
+            scenario.hideIme()
+            assertTrue("IME did not close before the test", scenario.waitForImeVisibility(false))
+
+            val closedHeight = scenario.webViewHeight()
+            val closedSafeArea = scenario.safeAreaProbe()
+
+            scenario.showIme()
+            assumeTrue(
+                "The test device did not show its software keyboard",
+                scenario.waitForImeVisibility(true),
+            )
+
+            var expectedReduction = 0
+            scenario.onActivity { activity ->
+                val browserContent = activity.browserContent()
+                val insets = checkNotNull(ViewCompat.getRootWindowInsets(browserContent))
+                val safeArea =
+                    insets.getInsets(
+                        WindowInsetsCompat.Type.systemBars() or
+                            WindowInsetsCompat.Type.displayCutout()
+                    )
+                val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+                expectedReduction = maxOf(safeArea.bottom, ime.bottom) - safeArea.bottom
+                assertEquals(maxOf(safeArea.bottom, ime.bottom), browserContent.paddingBottom)
+            }
+            assertTrue("IME did not reduce the WebView height", expectedReduction > 0)
+            assertEquals(expectedReduction, closedHeight - scenario.webViewHeight())
+            assertEquals("\"0px|0px\"", scenario.safeAreaProbe())
+
+            scenario.hideIme()
+            assertTrue("IME did not close after the test", scenario.waitForImeVisibility(false))
+            assertTrue(
+                "WebView height was not restored after closing the IME",
+                waitUntil { scenario.webViewHeight() == closedHeight },
+            )
+            assertEquals(closedSafeArea, scenario.safeAreaProbe())
+            assertEquals("\"0px|0px\"", scenario.safeAreaProbe())
+        }
+    }
+
+    @Test
     fun persistentCookieAndLocalStorageSurviveActivityRecreation() {
         val suffix = System.nanoTime().toString().replace('-', 'n')
         val storageKey = "armin_acceptance_storage_$suffix"
@@ -377,6 +453,50 @@ class BrowserAcceptanceTest {
         return checkNotNull(result)
     }
 
+    private fun ActivityScenario<MainActivity>.safeAreaProbe(): String =
+        evaluateJavascript(
+            "(() => { const style = getComputedStyle(document.getElementById('safe-area-probe')); " +
+                "return `${'$'}{style.paddingTop}|${'$'}{style.paddingBottom}`; })()"
+        )
+
+    private fun ActivityScenario<MainActivity>.webViewHeight(): Int {
+        var height = 0
+        onActivity { activity -> height = activity.webView().height }
+        return height
+    }
+
+    private fun ActivityScenario<MainActivity>.showIme() {
+        onActivity { activity ->
+            val addressBar = activity.addressBar()
+            addressBar.requestFocus()
+            activity
+                .getSystemService(InputMethodManager::class.java)
+                .showSoftInput(
+                    addressBar,
+                    0,
+                )
+        }
+    }
+
+    private fun ActivityScenario<MainActivity>.hideIme() {
+        onActivity { activity ->
+            activity.webView().requestFocus()
+            WindowCompat.getInsetsController(activity.window, activity.browserContent())
+                .hide(WindowInsetsCompat.Type.ime())
+        }
+    }
+
+    private fun ActivityScenario<MainActivity>.waitForImeVisibility(visible: Boolean): Boolean =
+        waitUntil {
+            var isVisible = false
+            onActivity { activity ->
+                isVisible =
+                    ViewCompat.getRootWindowInsets(activity.browserContent())
+                        ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+            }
+            isVisible == visible
+        }
+
     private fun ActivityScenario<MainActivity>.tapWebContent(x: Float, y: Float) {
         onActivity { activity ->
             val webView = activity.webView()
@@ -442,6 +562,9 @@ class BrowserAcceptanceTest {
     private fun MainActivity.addressBar(): EditText =
         contentRoot().descendantsOfType(EditText::class.java).single()
 
+    private fun MainActivity.browserContent(): LinearLayout =
+        privateField("browserContent") as LinearLayout
+
     private fun MainActivity.installFixtureHarness(body: String): BrowserController {
         val oldFullscreenController =
             privateField("fullscreenController") as FullscreenVideoController
@@ -494,6 +617,11 @@ class BrowserAcceptanceTest {
         setPrivateField("webView", fixtureWebView)
         setPrivateField("addressBar", fixtureAddressBar)
         setPrivateField("fullscreenController", fullscreenController)
+        MainActivity::class
+            .java
+            .getDeclaredMethod("applySafeAreaInsets")
+            .apply { isAccessible = true }
+            .invoke(this)
 
         val controller =
             BrowserController(
@@ -514,7 +642,8 @@ class BrowserAcceptanceTest {
 
     private fun fixtureEngine(body: String): ContentBlockingEngine {
         val document =
-            ("<!doctype html><meta name='viewport' content='width=device-width'>" +
+            ("<!doctype html><meta name='viewport' " +
+                    "content='width=device-width,viewport-fit=cover'>" +
                     "<style>html,body{margin:0}a,button{display:block;width:200px;" +
                     "height:120px}</style>$body")
                 .toByteArray(Charsets.UTF_8)
@@ -589,6 +718,9 @@ class BrowserAcceptanceTest {
         private const val META_REFRESH_DESTINATION_DISPLAY =
             "fixture.test/meta-pending?source=refresh#fragment"
         private const val HISTORY_URL = "$FIXTURE_URL#history-entry"
+        private const val SAFE_AREA_PROBE =
+            "<div id='safe-area-probe' style='padding-top:env(safe-area-inset-top);" +
+                "padding-bottom:env(safe-area-inset-bottom)'>safe area probe</div>"
         private const val POLL_ATTEMPTS = 120
         private const val POLL_MILLIS = 50L
         private const val SCRIPT_INSTALL_SETTLE_MILLIS = 250L
