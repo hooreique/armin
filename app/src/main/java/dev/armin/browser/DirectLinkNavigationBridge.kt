@@ -251,7 +251,9 @@ internal class DirectLinkNavigationBridge(
           window.addEventListener('touchend', stopForCapturedAnchor, true);
           window.addEventListener('mouseup', stopForCapturedAnchor, true);
           window.addEventListener('pointercancel', () => { activation = null; }, true);
-          window.addEventListener('blur', () => { activation = null; }, true);
+          window.addEventListener('blur', event => {
+            if (event.target === window) activation = null;
+          }, true);
           window.addEventListener('keydown', event => {
             activation = null;
             if (!event.isTrusted || event.key !== 'Enter') return;

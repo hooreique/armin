@@ -43,11 +43,59 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class BrowserAcceptanceTest {
     @Test
+    fun focusedInputDoesNotConsumeTheFirstLinkTap() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.prepareFixture(FOCUSED_INPUT_LINK_FIXTURE)
+            scenario.focusWebContent()
+            assertEquals(
+                "true",
+                scenario.evaluateJavascript(
+                    "document.getElementById('focused-input').focus(); " +
+                        "document.activeElement.id === 'focused-input'"
+                ),
+            )
+
+            scenario.tapWebContent(TAP_X, TAP_Y)
+
+            assertTrue(
+                "The first link tap did not navigate after the input lost DOM focus",
+                waitUntil { scenario.webViewUrl() == FOCUSED_INPUT_LINK_URL },
+            )
+        }
+    }
+
+    @Test
+    fun windowBlurCancelsTheCurrentActivationButNotTheNextTap() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.prepareFixture(FOCUSED_INPUT_LINK_FIXTURE)
+            scenario.focusWebContent()
+
+            val downTime = scenario.dispatchWebTouchDown(TAP_X, TAP_Y)
+            assertEquals(
+                "true",
+                scenario.evaluateJavascript("window.dispatchEvent(new Event('blur')); true"),
+            )
+            scenario.dispatchWebTouchUp(downTime, TAP_X, TAP_Y)
+            SystemClock.sleep(NAVIGATION_SETTLE_MILLIS)
+
+            assertEquals(FIXTURE_URL, scenario.webViewUrl())
+
+            scenario.tapWebContent(TAP_X, TAP_Y)
+
+            assertTrue(
+                "A complete tap did not navigate after the cancelled activation",
+                waitUntil { scenario.webViewUrl() == FOCUSED_INPUT_LINK_URL },
+            )
+        }
+    }
+
+    @Test
     fun targetBlankNeverReplacesTheCurrentDocumentOrCreatesAnAppWindow() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.prepareFixture("<a id='popup' target='_blank' href='#target-blank'>popup</a>")
             val addressBefore = scenario.addressText()
 
+            scenario.focusWebContent()
             scenario.tapWebContent(TAP_X, TAP_Y)
             SystemClock.sleep(NAVIGATION_SETTLE_MILLIS)
 
@@ -78,6 +126,7 @@ class BrowserAcceptanceTest {
             SystemClock.sleep(NAVIGATION_SETTLE_MILLIS)
             assertEquals(FIXTURE_URL, scenario.webViewUrl())
 
+            scenario.focusWebContent()
             scenario.tapWebContent(TAP_X, TAP_Y)
             SystemClock.sleep(NAVIGATION_SETTLE_MILLIS)
 
@@ -171,6 +220,7 @@ class BrowserAcceptanceTest {
             )
             assertTrue(waitUntil { scenario.webViewUrl() == HISTORY_URL })
 
+            scenario.focusWebContent()
             scenario.tapWebContent(TAP_X, TAP_Y)
 
             assertTrue(
@@ -505,15 +555,27 @@ class BrowserAcceptanceTest {
             isVisible == visible
         }
 
-    private fun ActivityScenario<MainActivity>.tapWebContent(x: Float, y: Float) {
+    private fun ActivityScenario<MainActivity>.focusWebContent() {
+        onActivity { activity -> activity.webView().requestFocus() }
+    }
+
+    private fun ActivityScenario<MainActivity>.dispatchWebTouchDown(x: Float, y: Float): Long {
+        val downTime = SystemClock.uptimeMillis()
         onActivity { activity ->
             val webView = activity.webView()
-            webView.requestFocus()
-            val downTime = SystemClock.uptimeMillis()
             val down = touchEvent(downTime, downTime, MotionEvent.ACTION_DOWN, x, y)
             webView.dispatchTouchEvent(down)
             down.recycle()
-            SystemClock.sleep(TAP_DURATION_MILLIS)
+        }
+        return downTime
+    }
+
+    private fun ActivityScenario<MainActivity>.dispatchWebTouchUp(
+        downTime: Long,
+        x: Float,
+        y: Float,
+    ) {
+        onActivity { activity ->
             val up =
                 touchEvent(
                     downTime,
@@ -522,9 +584,15 @@ class BrowserAcceptanceTest {
                     x,
                     y,
                 )
-            webView.dispatchTouchEvent(up)
+            activity.webView().dispatchTouchEvent(up)
             up.recycle()
         }
+    }
+
+    private fun ActivityScenario<MainActivity>.tapWebContent(x: Float, y: Float) {
+        val downTime = dispatchWebTouchDown(x, y)
+        SystemClock.sleep(TAP_DURATION_MILLIS)
+        dispatchWebTouchUp(downTime, x, y)
     }
 
     private fun ActivityScenario<MainActivity>.pressAppBack() {
@@ -726,6 +794,10 @@ class BrowserAcceptanceTest {
         private const val META_REFRESH_DESTINATION_DISPLAY =
             "fixture.test/meta-pending?source=refresh#fragment"
         private const val HISTORY_URL = "$FIXTURE_URL#history-entry"
+        private const val FOCUSED_INPUT_LINK_URL = "$FIXTURE_URL#focused-input-link"
+        private const val FOCUSED_INPUT_LINK_FIXTURE =
+            "<a id='fragment-link' href='#focused-input-link'>fragment link</a>" +
+                "<input id='focused-input' readonly value='focused'>"
         private const val SAFE_AREA_PROBE =
             "<div id='safe-area-probe' style='padding-top:env(safe-area-inset-top);" +
                 "padding-bottom:env(safe-area-inset-bottom)'>safe area probe</div>"
